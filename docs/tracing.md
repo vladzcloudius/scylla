@@ -178,7 +178,7 @@ CREATE TABLE system_traces.node_slow_log (
 * `node_ip`: Address of a Coordinator Node
 * `shard`: shard ID on a Coordinator, where the query has been handled
 * `command`: the query command, e.g. `select * from my_ks.my_cf`
-* `duration`: the duration of a query handling in miscroseconds
+* `duration`: the duration of a query handling in microseconds
 * `parameters`: query parameters like a `parameters` column in a system_traces.sessions table
 * `session_id`: the corresponding Tracing session ID
 * `source_ip`: Address of a Client that sent this query
