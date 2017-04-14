@@ -184,3 +184,43 @@ CREATE TABLE system_traces.node_slow_log (
 * `source_ip`: Address of a Client that sent this query
 * `table_names`: a list of tables used for this query, where applicable
 * `username`: a user name used for authentication with this query
+
+### How to get query traces?
+Each query tracing session gets a unique ID `session_id` which serves as a partition key in `system_traces.sessions` and `system_traces.events` tables.
+Once one has this key the rest is trivial: `SELECT * FROM system_traces.events WHERE session_id=<value>`.
+
+If we invoke tracing from the `cqlsh` using `TRACING ON` command the `session_id` is printed with traces themselves and one can easily grab it
+and get the same traces later if needed using the query above.
+
+If tracing was enabled using probabilistic tracing or with slow query log features (both described above) then one should use 
+time based index tables: `system_traces.sessions_time_idx` and `system_traces.node_slow_log_time_idx`.
+
+These indexes allow to get `session_id`s of all tracing sessions that happened in a specific time period.
+
+For instance, to get `session_id`s of all tracing sessions that started between `2016-09-07 16:56:30-0000` and `2016-09-07 16:58:00-0000` one may run the following query:
+
+`SELECT session_id from system_traces.sessions_time_idx where minutes in ('2016-09-07 16:56:00-0000','2016-09-07 16:57:00-0000','2016-09-07 16:58:00-0000') and started_at > '2016-09-07 16:56:30-0000'`
+
+* `system_traces.node_slow_log_time_idx` contains entries that correspond to queries traced only in the context of slow query logging.
+* `system_traces.sessions_time_idx` contains entries for all traces queries.
+
+#### Index tables' schemas are as follows:
+
+```
+CREATE TABLE system_traces.sessions_time_idx (
+    minute timestamp,
+    started_at timestamp,
+    session_id uuid,
+    PRIMARY KEY (minute, started_at, session_id))
+
+CREATE TABLE system_traces.node_slow_log_time_idx (
+    minute timestamp,
+    started_at timestamp,
+    session_id uuid,
+    start_time timeuuid,
+    node_ip inet,
+    shard int,
+    PRIMARY KEY (minute, started_at, session_id))
+```
+
+As you may notice each `system_traces.node_slow_log_time_idx` record contains both `system_traces.sessions` and `system_traces.node_slow_log` primary keys allowing to get the corresponding entries from each of these tables.
