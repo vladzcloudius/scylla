@@ -120,23 +120,23 @@ db::commitlog::config::config(const db::config& cfg)
     , mode(cfg.commitlog_sync() == "batch" ? sync_mode::BATCH : sync_mode::PERIODIC)
 {}
 
-db::commitlog::descriptor::descriptor(segment_id_type i, uint32_t v)
-        : id(i), ver(v) {
+db::commitlog::descriptor::descriptor(segment_id_type i, uint32_t v, const std::string& fname_prefix)
+        : id(i), ver(v), filename_prefix(fname_prefix) {
 }
 
 db::commitlog::descriptor::descriptor(replay_position p)
         : descriptor(p.id) {
 }
 
-db::commitlog::descriptor::descriptor(std::pair<uint64_t, uint32_t> p)
-        : descriptor(p.first, p.second) {
+db::commitlog::descriptor::descriptor(std::pair<uint64_t, uint32_t> p, const std::string& fname_prefix)
+        : descriptor(p.first, p.second, fname_prefix) {
 }
 
-db::commitlog::descriptor::descriptor(sstring filename)
-        : descriptor([filename]() {
+db::commitlog::descriptor::descriptor(sstring filename, const std::string& fname_prefix)
+        : descriptor([filename, fname_prefix]() {
             std::smatch m;
             // match both legacy and new version of commitlogs Ex: CommitLog-12345.log and CommitLog-4-12345.log.
-                std::regex rx("(?:.*/)?" + FILENAME_PREFIX + "((\\d+)(" + SEPARATOR + "\\d+)?)" + FILENAME_EXTENSION);
+                std::regex rx("(?:.*/)?" + fname_prefix + "((\\d+)(" + SEPARATOR + "\\d+)?)" + FILENAME_EXTENSION);
                 std::string sfilename = filename;
                 if (!std::regex_match(sfilename, m, rx)) {
                     throw std::domain_error("Cannot parse the version of the file: " + filename);
@@ -150,11 +150,11 @@ db::commitlog::descriptor::descriptor(sstring filename)
                 uint32_t ver = std::stoul(m[2].str());
 
                 return std::make_pair(id, ver);
-            }()) {
+            }(), fname_prefix) {
 }
 
 sstring db::commitlog::descriptor::filename() const {
-    return FILENAME_PREFIX + std::to_string(ver) + SEPARATOR
+    return filename_prefix + std::to_string(ver) + SEPARATOR
             + std::to_string(id) + FILENAME_EXTENSION;
 }
 
@@ -1164,7 +1164,7 @@ void db::commitlog::segment_manager::flush_segments(bool force) {
 }
 
 future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager::allocate_segment(bool active) {
-    descriptor d(next_id());
+    descriptor d(next_id(), 1, cfg.fname_prefix);
     file_open_options opt;
     opt.extent_allocation_size_hint = max_size;
     return open_checked_file_dma(commit_error_handler, cfg.commit_log_location + "/" + d.filename(), open_flags::wo | open_flags::create, opt).then([this, d, active](file f) {
