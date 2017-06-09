@@ -75,6 +75,12 @@ public:
     void write(data_output& out) const;
 };
 
+template<typename Writer>
+auto write_commitlog_entry(Writer&& wr, bool with_schema, schema_ptr s, const frozen_mutation& fm) {
+    return (with_schema ? std::forward<Writer>(wr).write_mapping(s->get_column_mapping()) : std::forward<Writer>(wr).skip_mapping())
+           .write_mutation(fm);
+}
+
 class commitlog_entry_reader {
     commitlog_entry _ce;
 public:
