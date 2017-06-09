@@ -36,13 +36,7 @@
 
 template<typename Output>
 void commitlog_entry_writer::serialize(Output& out) const {
-    [this, wr = ser::writer_of_commitlog_entry<Output>(out)] () mutable {
-        if (_with_schema) {
-            return std::move(wr).write_mapping(_schema->get_column_mapping());
-        } else {
-            return std::move(wr).skip_mapping();
-        }
-    }().write_mutation(_mutation).end_commitlog_entry();
+    write_commitlog_entry(ser::writer_of_commitlog_entry<Output>(out), _with_schema, _schema, _mutation).end_commitlog_entry();
 }
 
 void commitlog_entry_writer::compute_size() {
