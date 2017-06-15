@@ -176,6 +176,7 @@ scylla_tests = [
     'tests/partitioner_test',
     'tests/frozen_mutation_test',
     'tests/serialized_action_test',
+    'tests/hint_test',
     'tests/perf/perf_mutation',
     'tests/lsa_async_eviction_test',
     'tests/lsa_sync_eviction_test',
