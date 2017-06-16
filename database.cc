@@ -27,7 +27,7 @@
 #include "db/system_keyspace.hh"
 #include "db/consistency_level.hh"
 #include "db/commitlog/commitlog.hh"
-#include "db/commitlog/commitlog_entry.hh"
+#include "db/commitlog/commitlog_entry_serializer.hh"
 #include "db/config.hh"
 #include "to_string.hh"
 #include "query-result-writer.hh"

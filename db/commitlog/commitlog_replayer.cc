@@ -49,6 +49,7 @@
 #include <core/sharded.hh>
 
 #include "commitlog.hh"
+#include "commitlog_entry_serializer.hh"
 #include "commitlog_replayer.hh"
 #include "database.hh"
 #include "sstables/sstables.hh"
@@ -57,7 +58,6 @@
 #include "log.hh"
 #include "converting_mutation_partition_applier.hh"
 #include "schema_registry.hh"
-#include "commitlog_entry.hh"
 
 static logging::logger rlogger("commitlog_replayer");
 

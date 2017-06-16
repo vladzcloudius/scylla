@@ -21,7 +21,7 @@
 
 #include "counters.hh"
 #include "commitlog.hh"
-#include "commitlog_entry.hh"
+#include "commitlog_entry_serializer.hh"
 
 #include "idl/uuid.dist.hh"
 #include "idl/keys.dist.hh"
@@ -74,6 +74,6 @@ commitlog_entry_reader::commitlog_entry_reader(const temporary_buffer<char>& buf
     seastar::simple_input_stream in(buffer.get(), buffer.size());
     return ser::deserialize(in, boost::type<commitlog_entry>());
 }())
-{
-}
+{}
+
 }
