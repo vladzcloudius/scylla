@@ -23,57 +23,12 @@
 #include "commitlog.hh"
 #include "commitlog_entry_serializer.hh"
 
-#include "idl/uuid.dist.hh"
-#include "idl/keys.dist.hh"
-#include "idl/frozen_mutation.dist.hh"
-#include "idl/mutation.dist.hh"
-#include "idl/commitlog.dist.hh"
-#include "serializer_impl.hh"
-#include "serialization_visitors.hh"
-#include "idl/uuid.dist.impl.hh"
-#include "idl/keys.dist.impl.hh"
-#include "idl/frozen_mutation.dist.impl.hh"
-#include "idl/mutation.dist.impl.hh"
-#include "idl/commitlog.dist.impl.hh"
-
 namespace db {
-template<typename Output>
-void commitlog_entry_writer::serialize(Output& out) const {
-    write_commitlog_entry(ser::writer_of_commitlog_entry<Output>(out), _with_schema, _schema, _mutation).end_commitlog_entry();
-}
-
-void commitlog_entry_writer::compute_size() {
-    seastar::measuring_output_stream ms;
-    serialize(ms);
-    _size = ms.size();
-}
-
-void commitlog_entry_writer::write(data_output& out) const {
-    seastar::simple_output_stream str(out.reserve(exact_size()), exact_size());
-    serialize(str);
-}
-
-size_t commitlog_entry_writer::size(commitlog::segment& seg) {
-    set_with_schema(!seg.is_schema_version_known(schema()));
-    return exact_size();
-}
-
-size_t commitlog_entry_writer::size() {
-    return estimate_size();
-}
-
-void commitlog_entry_writer::write(commitlog::segment& seg, commitlog::output& out) {
-    if (with_schema()) {
-        seg.add_schema_version(schema());
-    }
-    write(out);
-}
 
 commitlog_entry_reader::commitlog_entry_reader(const temporary_buffer<char>& buffer)
     : _ce([&] {
     seastar::simple_input_stream in(buffer.get(), buffer.size());
     return ser::deserialize(in, boost::type<commitlog_entry>());
-}())
-{}
+}()) {}
 
 }
