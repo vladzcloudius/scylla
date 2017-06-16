@@ -38,6 +38,7 @@ public:
     const frozen_mutation& mutation() const { return _mutation; }
 };
 
+namespace db {
 class commitlog_entry_writer {
     schema_ptr _schema;
     const frozen_mutation& _mutation;
@@ -89,3 +90,4 @@ public:
     const stdx::optional<column_mapping>& get_column_mapping() const { return _ce.mapping(); }
     const frozen_mutation& mutation() const { return _ce.mutation(); }
 };
+}

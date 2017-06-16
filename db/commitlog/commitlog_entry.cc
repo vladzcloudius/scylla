@@ -35,6 +35,7 @@
 #include "idl/mutation.dist.impl.hh"
 #include "idl/commitlog.dist.impl.hh"
 
+namespace db {
 template<typename Output>
 void commitlog_entry_writer::serialize(Output& out) const {
     write_commitlog_entry(ser::writer_of_commitlog_entry<Output>(out), _with_schema, _schema, _mutation).end_commitlog_entry();
@@ -57,4 +58,5 @@ commitlog_entry_reader::commitlog_entry_reader(const temporary_buffer<char>& buf
     return ser::deserialize(in, boost::type<commitlog_entry>());
 }())
 {
+}
 }
