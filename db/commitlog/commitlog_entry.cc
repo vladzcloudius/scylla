@@ -22,6 +22,7 @@
 #include "counters.hh"
 #include "commitlog.hh"
 #include "commitlog_entry.hh"
+
 #include "idl/uuid.dist.hh"
 #include "idl/keys.dist.hh"
 #include "idl/frozen_mutation.dist.hh"
@@ -48,8 +49,24 @@ void commitlog_entry_writer::compute_size() {
 }
 
 void commitlog_entry_writer::write(data_output& out) const {
-    seastar::simple_output_stream str(out.reserve(size()), size());
+    seastar::simple_output_stream str(out.reserve(exact_size()), exact_size());
     serialize(str);
+}
+
+size_t commitlog_entry_writer::size(commitlog::segment& seg) {
+    set_with_schema(!seg.is_schema_version_known(schema()));
+    return exact_size();
+}
+
+size_t commitlog_entry_writer::size() {
+    return estimate_size();
+}
+
+void commitlog_entry_writer::write(commitlog::segment& seg, commitlog::output& out) {
+    if (with_schema()) {
+        seg.add_schema_version(schema());
+    }
+    write(out);
 }
 
 commitlog_entry_reader::commitlog_entry_reader(const temporary_buffer<char>& buffer)

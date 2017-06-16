@@ -24,10 +24,10 @@
 #include "database.hh"
 #include "unimplemented.hh"
 #include "core/future-util.hh"
-#include "db/commitlog/commitlog_entry.hh"
 #include "db/system_keyspace.hh"
 #include "db/consistency_level.hh"
 #include "db/commitlog/commitlog.hh"
+#include "db/commitlog/commitlog_entry.hh"
 #include "db/config.hh"
 #include "to_string.hh"
 #include "query-result-writer.hh"
@@ -3163,8 +3163,8 @@ future<mutation> database::apply_counter_update(schema_ptr s, const frozen_mutat
 future<> database::apply_with_commitlog(column_family& cf, const mutation& m, timeout_clock::time_point timeout) {
     if (cf.commitlog() != nullptr) {
         return do_with(freeze(m), [this, &m, &cf, timeout] (frozen_mutation& fm) {
-            db::commitlog_entry_writer cew(m.schema(), fm);
-            return cf.commitlog()->add_entry(m.schema()->id(), cew, timeout);
+            shared_ptr<db::entry_writer> cew(::make_shared<db::commitlog_entry_writer>(m.schema(), fm));
+            return cf.commitlog()->add_entry(m.schema()->id(), std::move(cew), timeout);
         }).then([this, &m, &cf, timeout] (db::rp_handle h) {
             return apply_in_memory(m, cf, std::move(h), timeout).handle_exception([this, &cf, &m, timeout] (auto ep) {
                 try {
@@ -3187,8 +3187,8 @@ future<> database::apply_with_commitlog(column_family& cf, const mutation& m, ti
 future<> database::apply_with_commitlog(schema_ptr s, column_family& cf, utils::UUID uuid, const frozen_mutation& m, timeout_clock::time_point timeout) {
     auto cl = cf.commitlog();
     if (cl != nullptr) {
-        db::commitlog_entry_writer cew(s, m);
-        return cf.commitlog()->add_entry(uuid, cew, timeout).then([&m, this, s, timeout, cl](db::rp_handle h) {
+        shared_ptr<db::entry_writer> cew(::make_shared<db::commitlog_entry_writer>(s, m));
+        return cf.commitlog()->add_entry(uuid, std::move(cew), timeout).then([&m, this, s, timeout, cl](db::rp_handle h) {
             return this->apply_in_memory(m, s, std::move(h), timeout).handle_exception([this, s, &m, timeout] (auto ep) {
                 try {
                     std::rethrow_exception(ep);
