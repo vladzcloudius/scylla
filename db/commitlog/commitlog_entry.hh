@@ -40,14 +40,14 @@ public:
 
 namespace db {
 
-struct entry_writer {
+struct i_commitlog_entry_writer {
     virtual size_t size(commitlog::segment&) = 0;
     // Returns segment-independent size of the entry. Must be <= than segment-dependant size.
     virtual size_t size() = 0;
     virtual void write(commitlog::segment&, commitlog::output&) = 0;
 };
 
-class commitlog_entry_writer : public entry_writer {
+class commitlog_entry_writer : public i_commitlog_entry_writer {
     schema_ptr _schema;
     const frozen_mutation& _mutation;
     bool _with_schema = true;

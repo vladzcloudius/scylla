@@ -62,7 +62,7 @@ namespace db {
 class config;
 class rp_set;
 class rp_handle;
-class entry_writer;
+class i_commitlog_entry_writer;
 
 /*
  * Commit Log tracks every write operation into the system. The aim of
@@ -215,7 +215,7 @@ public:
      * Resolves with timed_out_error when timeout is reached.
      * @param entry_writer a writer responsible for writing the entry
      */
-    future<rp_handle> add_entry(const cf_id_type& id, shared_ptr<entry_writer> writer, timeout_clock::time_point timeout);
+    future<rp_handle> add_entry(const cf_id_type& id, shared_ptr<i_commitlog_entry_writer> writer, timeout_clock::time_point timeout);
 
     /**
      * Modifies the per-CF dirty cursors of any commit log segments for the column family according to the position
@@ -397,7 +397,7 @@ public:
     }
 
     future<rp_handle>
-    allocate_when_possible(const cf_id_type& id, shared_ptr<entry_writer> writer, commitlog::timeout_clock::time_point timeout);
+    allocate_when_possible(const cf_id_type& id, shared_ptr<i_commitlog_entry_writer> writer, commitlog::timeout_clock::time_point timeout);
 
     struct stats {
         uint64_t cycle_count = 0;
@@ -686,7 +686,7 @@ public:
     /**
      * Add a "mutation" to the segment.
      */
-    future<rp_handle> allocate(const cf_id_type& id, shared_ptr<entry_writer> writer, segment_manager::request_controller_units permit, commitlog::timeout_clock::time_point timeout);
+    future<rp_handle> allocate(const cf_id_type& id, shared_ptr<i_commitlog_entry_writer> writer, segment_manager::request_controller_units permit, commitlog::timeout_clock::time_point timeout);
 
     position_type position() const {
         return position_type(_file_pos + _buf_pos);

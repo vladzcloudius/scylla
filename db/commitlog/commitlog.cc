@@ -442,7 +442,7 @@ future<db::commitlog::segment::sseg_ptr> db::commitlog::segment::batch_cycle(tim
     });
 }
 
-future<db::rp_handle> db::commitlog::segment::allocate(const cf_id_type& id, shared_ptr<entry_writer> writer, segment_manager::request_controller_units permit, commitlog::timeout_clock::time_point timeout) {
+future<db::rp_handle> db::commitlog::segment::allocate(const cf_id_type& id, shared_ptr<i_commitlog_entry_writer> writer, segment_manager::request_controller_units permit, commitlog::timeout_clock::time_point timeout) {
     if (must_sync()) {
         return with_timeout(timeout, sync()).then([this, id, writer = std::move(writer), permit = std::move(permit), timeout] (auto s) mutable {
             return s->allocate(id, std::move(writer), std::move(permit), timeout);
@@ -544,7 +544,7 @@ size_t db::commitlog::segment::clear_buffer_slack() {
 }
 
 future<db::rp_handle>
-db::commitlog::segment_manager::allocate_when_possible(const cf_id_type& id, shared_ptr<entry_writer> writer, commitlog::timeout_clock::time_point timeout) {
+db::commitlog::segment_manager::allocate_when_possible(const cf_id_type& id, shared_ptr<i_commitlog_entry_writer> writer, commitlog::timeout_clock::time_point timeout) {
     auto size = writer->size();
     // If this is already too big now, we should throw early. It's also a correctness issue, since
     // if we are too big at this moment we'll never reach allocate() to actually throw at that
@@ -1104,7 +1104,7 @@ void db::commitlog::segment_manager::release_buffer(buffer_type&& b) {
  */
 future<db::rp_handle> db::commitlog::add(const cf_id_type& id,
         size_t size, commitlog::timeout_clock::time_point timeout, serializer_func func) {
-    class serializer_func_entry_writer final : public entry_writer {
+    class serializer_func_entry_writer final : public i_commitlog_entry_writer {
         serializer_func _func;
         size_t _size;
     public:
@@ -1121,7 +1121,7 @@ future<db::rp_handle> db::commitlog::add(const cf_id_type& id,
     return _segment_manager->allocate_when_possible(id, writer, timeout);
 }
 
-future<db::rp_handle> db::commitlog::add_entry(const cf_id_type& id, shared_ptr<db::entry_writer> writer, timeout_clock::time_point timeout)
+future<db::rp_handle> db::commitlog::add_entry(const cf_id_type& id, shared_ptr<db::i_commitlog_entry_writer> writer, timeout_clock::time_point timeout)
 {
     return _segment_manager->allocate_when_possible(id, std::move(writer), timeout);
 }
