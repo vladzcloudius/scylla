@@ -20,6 +20,7 @@
  */
 
 #include "counters.hh"
+#include "commitlog.hh"
 #include "commitlog_entry.hh"
 #include "idl/uuid.dist.hh"
 #include "idl/keys.dist.hh"
