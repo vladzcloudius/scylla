@@ -23,3 +23,10 @@ class commitlog_entry [[writable]] {
     std::experimental::optional<column_mapping> mapping();
     frozen_mutation mutation();
 };
+
+class hint_entry [[writable]] {
+    db::hints::ts_clock::time_point ts();
+    db::hints::gc_gs_clock::time_point min_gc_gs();
+    commitlog_entry cl_entry;
+};
+
