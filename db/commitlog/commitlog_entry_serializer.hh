@@ -23,6 +23,7 @@
 
 #include "db/commitlog/commitlog_entry_serializer_base.hh"
 #include "db/commitlog/commitlog_entry.hh"
+#include "db/hints/hint_entry.hh"
 
 #include "idl/uuid.dist.hh"
 #include "idl/keys.dist.hh"

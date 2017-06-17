@@ -1,8 +1,4 @@
 /*
- * Copyright 2016 ScyllaDB
- */
-
-/*
  * This file is part of Scylla.
  *
  * Scylla is free software: you can redistribute it and/or modify
@@ -19,14 +15,36 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-class commitlog_entry [[writable]] {
-    std::experimental::optional<column_mapping> mapping();
-    frozen_mutation mutation();
-};
+/*
+ * Copyright (C) 2017 ScyllaDB
+ */
 
-class hint_entry [[writable]] {
-    api::timestamp_type ts();
-    api::timestamp_type min_gc_gs();
+#pragma once
+
+#include "timestamp.hh"
+#include "db/commitlog/commitlog_entry.hh"
+
+class hint_entry {
+private:
+    api::timestamp_type _ts;
+    api::timestamp_type _min_gc_gs;
+
+public:
     commitlog_entry cl_entry;
+
+public:
+    hint_entry(api::timestamp_type ts, api::timestamp_type min_gc_gs, commitlog_entry cle)
+        : _ts(ts)
+        , _min_gc_gs(min_gc_gs)
+        , cl_entry(std::move(cle))
+    {}
+
+    api::timestamp_type ts() const {
+        return _ts;
+    }
+
+    api::timestamp_type min_gc_gs() const {
+        return _min_gc_gs;
+    }
 };
 
