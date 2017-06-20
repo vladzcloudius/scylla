@@ -24,7 +24,7 @@
 #include "database.hh"
 #include "unimplemented.hh"
 #include "core/future-util.hh"
-#include "db/commitlog/commitlog_entry.hh"
+#include "db/commitlog/commitlog_entry_serializer.hh"
 #include "db/system_keyspace.hh"
 #include "db/consistency_level.hh"
 #include "db/commitlog/commitlog.hh"
