@@ -20,7 +20,8 @@
  */
 
 #include "counters.hh"
-#include "commitlog_entry.hh"
+#include "commitlog_entry_serializer.hh"
+
 #include "idl/uuid.dist.hh"
 #include "idl/keys.dist.hh"
 #include "idl/frozen_mutation.dist.hh"

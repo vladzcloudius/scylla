@@ -57,7 +57,7 @@
 #include "log.hh"
 #include "converting_mutation_partition_applier.hh"
 #include "schema_registry.hh"
-#include "commitlog_entry.hh"
+#include "commitlog_entry_serializer.hh"
 
 static logging::logger rlogger("commitlog_replayer");
 

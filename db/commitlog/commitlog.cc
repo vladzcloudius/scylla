@@ -72,7 +72,7 @@
 #include "utils/runtime.hh"
 #include "utils/flush_queue.hh"
 #include "log.hh"
-#include "commitlog_entry.hh"
+#include "commitlog_entry_serializer.hh"
 #include "service/priority_manager.hh"
 
 #include <boost/range/numeric.hpp>
