@@ -40,7 +40,7 @@ public:
 
 namespace db {
 
-struct entry_writer {
+struct commitlog_entry_writer {
     virtual size_t exact_size() const = 0;
     // Returns segment-independent size of the entry. Must be <= than segment-dependant size.
     virtual size_t estimate_size() const = 0;
@@ -50,7 +50,7 @@ struct entry_writer {
     virtual schema_ptr schema() const { return nullptr; }
 };
 
-class commitlog_entry_writer : public entry_writer {
+class commitlog_mutation_writer : public commitlog_entry_writer {
     schema_ptr _schema;
     const frozen_mutation& _mutation;
     bool _with_schema = true;
@@ -60,7 +60,7 @@ private:
     void serialize(Output&) const;
     void compute_size();
 public:
-    commitlog_entry_writer(schema_ptr s, const frozen_mutation& fm)
+    commitlog_mutation_writer(schema_ptr s, const frozen_mutation& fm)
         : _schema(std::move(s)), _mutation(fm)
     {}
 
