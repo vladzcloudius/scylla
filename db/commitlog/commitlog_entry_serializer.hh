@@ -62,10 +62,10 @@ public:
 
 /// \class commitlog_entry_reader
 /// \brief A classic commitlog entry reader.
-class commitlog_entry_reader {
+class commitlog_mutation_reader {
     commitlog_entry _ce;
 public:
-    commitlog_entry_reader(const temporary_buffer<char>& buffer);
+    commitlog_mutation_reader(const temporary_buffer<char>& buffer);
 
     const stdx::optional<column_mapping>& get_column_mapping() const { return _ce.mapping(); }
     const frozen_mutation& mutation() const { return _ce.mutation(); }

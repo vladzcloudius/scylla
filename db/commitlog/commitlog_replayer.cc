@@ -242,7 +242,7 @@ db::commitlog_replayer::impl::recover(sstring file) const {
 future<> db::commitlog_replayer::impl::process(stats* s, temporary_buffer<char> buf, replay_position rp) const {
     try {
 
-        commitlog_entry_reader cer(buf);
+        commitlog_mutation_reader cer(buf);
         auto& fm = cer.mutation();
 
         auto& local_cm = _column_mappings.local().map;

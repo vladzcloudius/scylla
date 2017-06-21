@@ -24,7 +24,7 @@
 
 namespace db {
 
-commitlog_entry_reader::commitlog_entry_reader(const temporary_buffer<char>& buffer)
+commitlog_mutation_reader::commitlog_mutation_reader(const temporary_buffer<char>& buffer)
     : _ce([&] {
     seastar::simple_input_stream in(buffer.get(), buffer.size());
     return ser::deserialize(in, boost::type<commitlog_entry>());
