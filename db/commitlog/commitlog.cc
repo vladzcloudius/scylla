@@ -458,7 +458,7 @@ public:
     }
 
     bool is_schema_version_known(schema_ptr s) {
-        return _known_schema_versions.count(s->version());
+        return s && _known_schema_versions.count(s->version());
     }
     void add_schema_version(schema_ptr s) {
         _known_schema_versions.emplace(s->version());
@@ -753,7 +753,8 @@ public:
             });
         }
 
-        const auto size = writer->size(*this);
+        writer->set_with_schema(!is_schema_version_known(writer->schema()));
+        const auto size = writer->exact_size();
         const auto s = size + entry_overhead_size; // total size
         auto ep = _segment_manager->sanity_check_size(s);
         if (ep) {
@@ -809,7 +810,10 @@ public:
         out.write(crc.checksum());
 
         // actual data
-        writer->write(*this, out);
+        if (writer->with_schema()) {
+            add_schema_version(writer->schema());
+        }
+        writer->write(out);
 
         crc.process_bytes(p + 2 * sizeof(uint32_t), size);
 
@@ -897,7 +901,7 @@ public:
 
 future<db::rp_handle>
 db::commitlog::segment_manager::allocate_when_possible(const cf_id_type& id, shared_ptr<entry_writer> writer, commitlog::timeout_clock::time_point timeout) {
-    auto size = writer->size();
+    auto size = writer->estimate_size();
     // If this is already too big now, we should throw early. It's also a correctness issue, since
     // if we are too big at this moment we'll never reach allocate() to actually throw at that
     // point.
@@ -1462,9 +1466,9 @@ future<db::rp_handle> db::commitlog::add(const cf_id_type& id,
         serializer_func_entry_writer(size_t sz, serializer_func func)
             : _func(std::move(func)), _size(sz)
         { }
-        virtual size_t size(segment&) override { return _size; }
-        virtual size_t size() override { return _size; }
-        virtual void write(segment&, output& out) override {
+        virtual size_t exact_size() const override { return _size; }
+        virtual size_t estimate_size() const override { return _size; }
+        virtual void write(output& out) const override {
             _func(out);
         }
     };
@@ -1473,26 +1477,8 @@ future<db::rp_handle> db::commitlog::add(const cf_id_type& id,
 }
 
 future<db::rp_handle> db::commitlog::add_entry(const cf_id_type& id, const commitlog_entry_writer& cew, timeout_clock::time_point timeout)
-{
-    class cl_entry_writer final : public entry_writer {
-        commitlog_entry_writer _writer;
-    public:
-        cl_entry_writer(const commitlog_entry_writer& wr) : _writer(wr) { }
-        virtual size_t size(segment& seg) override {
-            _writer.set_with_schema(!seg.is_schema_version_known(_writer.schema()));
-            return _writer.size();
-        }
-        virtual size_t size() override {
-            return _writer.mutation_size();
-        }
-        virtual void write(segment& seg, output& out) override {
-            if (_writer.with_schema()) {
-                seg.add_schema_version(_writer.schema());
-            }
-            _writer.write(out);
-        }
-    };
-    auto writer = ::make_shared<cl_entry_writer>(cew);
+{    
+    auto writer = ::make_shared<commitlog_entry_writer>(cew);
     return _segment_manager->allocate_when_possible(id, writer, timeout);
 }
 

@@ -39,7 +39,18 @@ public:
 };
 
 namespace db {
-class commitlog_entry_writer {
+
+struct entry_writer {
+    virtual size_t exact_size() const = 0;
+    // Returns segment-independent size of the entry. Must be <= than segment-dependant size.
+    virtual size_t estimate_size() const = 0;
+    virtual void write(data_output&) const = 0;
+    virtual void set_with_schema(bool) {}
+    virtual bool with_schema() const { return false; }
+    virtual schema_ptr schema() const { return nullptr; }
+};
+
+class commitlog_entry_writer : public entry_writer {
     schema_ptr _schema;
     const frozen_mutation& _mutation;
     bool _with_schema = true;
@@ -53,27 +64,29 @@ public:
         : _schema(std::move(s)), _mutation(fm)
     {}
 
-    void set_with_schema(bool value) {
+    virtual void set_with_schema(bool value) override {
         _with_schema = value;
         compute_size();
     }
-    bool with_schema() {
+
+    virtual bool with_schema() const override {
         return _with_schema;
     }
-    schema_ptr schema() const {
+
+    virtual schema_ptr schema() const override {
         return _schema;
     }
 
-    size_t size() const {
+    virtual size_t exact_size() const override {
         assert(_size != std::numeric_limits<size_t>::max());
         return _size;
     }
 
-    size_t mutation_size() const {
+    virtual size_t estimate_size() const override {
         return _mutation.representation().size();
     }
 
-    void write(data_output& out) const;
+    virtual void write(data_output& out) const override;
 };
 
 template<typename Writer>

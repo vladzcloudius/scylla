@@ -350,13 +350,6 @@ public:
             const sstring&, commit_load_reader_func, position_type = 0);
 private:
     commitlog(config);
-
-    struct entry_writer {
-        virtual size_t size(segment&) = 0;
-        // Returns segment-independent size of the entry. Must be <= than segment-dependant size.
-        virtual size_t size() = 0;
-        virtual void write(segment&, output&) = 0;
-    };
 };
 
 }
