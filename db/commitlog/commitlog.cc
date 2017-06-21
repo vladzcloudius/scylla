@@ -1476,10 +1476,9 @@ future<db::rp_handle> db::commitlog::add(const cf_id_type& id,
     return _segment_manager->allocate_when_possible(id, writer, timeout);
 }
 
-future<db::rp_handle> db::commitlog::add_entry(const cf_id_type& id, const commitlog_entry_writer& cew, timeout_clock::time_point timeout)
-{    
-    auto writer = ::make_shared<commitlog_entry_writer>(cew);
-    return _segment_manager->allocate_when_possible(id, writer, timeout);
+future<db::rp_handle> db::commitlog::add_entry(const cf_id_type& id, shared_ptr<db::entry_writer> writer, timeout_clock::time_point timeout)
+{
+    return _segment_manager->allocate_when_possible(id, std::move(writer), timeout);
 }
 
 db::commitlog::commitlog(config cfg)
