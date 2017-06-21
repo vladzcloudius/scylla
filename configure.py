@@ -113,6 +113,31 @@ def maybe_static(flag, libs):
         libs = '-Wl,-Bstatic {} -Wl,-Bdynamic'.format(libs)
     return libs
 
+def adjust_visibility_flags(compiler):
+    # https://gcc.gnu.org/bugzilla/show_bug.cgi?id=80947
+    flags = ['-fvisibility=hidden', '-std=gnu++1y', '-Werror=attributes']
+    if not try_compile(compiler, flags=flags, source=textwrap.dedent('''
+            template <class T>
+            class MyClass  {
+            public:
+                MyClass() {
+                   auto outer = [this] ()
+                        {
+                            auto fn = [this]   {  };
+                            //use fn for something here
+                        };
+                }
+            };
+
+            int main() {
+                 MyClass<int> r;
+            }
+            ''')):
+        print('Notice: disabling -Wattributes due to https://gcc.gnu.org/bugzilla/show_bug.cgi?id=80947')
+        return '-Wno-attributes'
+    else:
+        return ''
+
 class Thrift(object):
     def __init__(self, source, service):
         self.source = source
@@ -673,6 +698,7 @@ warnings = ' '.join(warnings + ['-Wno-error=deprecated-declarations'])
 
 dbgflag = debug_flag(args.cxx) if args.debuginfo else ''
 tests_link_rule = 'link' if args.tests_debuginfo else 'link_stripped'
+visibility_flags = adjust_visibility_flags(args.cxx)
 
 if args.so:
     args.pie = '-shared'
@@ -905,8 +931,8 @@ with open(buildfile, 'w') as f:
                         URL: http://seastar-project.org/
                         Description: Advanced C++ framework for high-performance server applications on modern hardware.
                         Version: 1.0
-                        Libs: -L{srcdir}/{builddir} -Wl,--whole-archive -lseastar -Wl,--no-whole-archive {dbgflag} -Wl,--no-as-needed {static} {pie} -fvisibility=hidden -pthread {user_ldflags} {libs} {sanitize_libs}
-                        Cflags: -std=gnu++1y {dbgflag} {fpie} -Wall -Werror -fvisibility=hidden -pthread -I{srcdir} -I{srcdir}/{builddir}/gen {user_cflags} {warnings} {defines} {sanitize} {opt}
+                        Libs: -L{srcdir}/{builddir} -Wl,--whole-archive -lseastar -Wl,--no-whole-archive {dbgflag} -Wl,--no-as-needed {static} {pie} -fvisibility=hidden {visibility_flags} -pthread {user_ldflags} {libs} {sanitize_libs}
+                        Cflags: -std=gnu++1y {dbgflag} {fpie} -Wall -Werror -fvisibility=hidden {visibility_flags} -pthread -I{srcdir} -I{srcdir}/{builddir}/gen {user_cflags} {warnings} {defines} {sanitize} {opt}
                         ''').format(builddir = 'build/' + mode, srcdir = os.getcwd(), **vars)
                 f.write('build $builddir/{}/{}: gen\n  text = {}\n'.format(mode, binary, repr(pc)))
             elif binary.endswith('.a'):
