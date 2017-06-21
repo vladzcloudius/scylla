@@ -47,7 +47,6 @@
 #include "core/shared_ptr.hh"
 #include "core/stream.hh"
 #include "replay_position.hh"
-#include "commitlog_entry.hh"
 
 namespace seastar { class file; }
 
@@ -58,6 +57,7 @@ namespace db {
 class config;
 class rp_set;
 class rp_handle;
+class entry_writer;
 
 /*
  * Commit Log tracks every write operation into the system. The aim of
@@ -210,7 +210,7 @@ public:
      * Resolves with timed_out_error when timeout is reached.
      * @param entry_writer a writer responsible for writing the entry
      */
-    future<rp_handle> add_entry(const cf_id_type& id, const commitlog_entry_writer& entry_writer, timeout_clock::time_point timeout);
+    future<rp_handle> add_entry(const cf_id_type& id, shared_ptr<entry_writer> writer, timeout_clock::time_point timeout);
 
     /**
      * Modifies the per-CF dirty cursors of any commit log segments for the column family according to the position
