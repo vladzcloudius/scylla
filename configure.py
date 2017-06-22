@@ -758,7 +758,7 @@ if args.staticboost:
 if args.gcc6_concepts:
     seastar_flags += ['--enable-gcc6-concepts']
 
-seastar_cflags = args.user_cflags + " -march=nehalem"
+seastar_cflags = args.user_cflags #+ " -march=nehalem"
 seastar_flags += ['--compiler', args.cxx, '--c-compiler', args.cc, '--cflags=%s' % (seastar_cflags)]
 
 status = subprocess.call([python, './configure.py'] + seastar_flags, cwd = 'seastar')
