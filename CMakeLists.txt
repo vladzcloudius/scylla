@@ -111,5 +111,8 @@ add_executable(scylla
 
 target_include_directories(scylla PRIVATE
         .
+        ./seastar/dpdk/lib/librte_eal/common/include
+        ./seastar/dpdk/lib/librte_ether
+        ./seastar/build/dpdk/include
         ${SEASTAR_INCLUDE_DIRS}
         build/release/gen)
