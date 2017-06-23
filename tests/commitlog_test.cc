@@ -38,8 +38,11 @@
 #include "utils/UUID_gen.hh"
 #include "tmpdir.hh"
 #include "db/commitlog/commitlog.hh"
+#include "db/commitlog/commitlog_entry_serializer.hh"
 #include "db/commitlog/rp_set.hh"
 #include "log.hh"
+#include "test_services.hh"
+#include "schema_builder.hh"
 
 #include "disk-error-handler.hh"
 
@@ -50,17 +53,28 @@ using namespace db;
 
 template<typename Func>
 static future<> cl_test(commitlog::config cfg, Func && f) {
-    tmpdir tmp;
-    cfg.commit_log_location = tmp.path;
-    return commitlog::create_commitlog(cfg).then([f = std::forward<Func>(f)](commitlog log) mutable {
-        return do_with(std::move(log), [f = std::forward<Func>(f)](commitlog& log) {
-            return futurize_apply(f, log).finally([&log] {
-                return log.shutdown().then([&log] {
-                    return log.clear();
-                });
-            });
-        });
-    }).finally([tmp = std::move(tmp)] {
+    return seastar::async([cfg = std::move(cfg), f = std::move(f)] () mutable {
+        tmpdir tmp;
+        cfg.commit_log_location = tmp.path;
+        commitlog log = commitlog::create_commitlog(cfg).get0();
+        std::exception_ptr eptr;
+        try {
+            storage_service_for_tests ssft;
+            auto common_schema = schema_builder("ks", "test")
+                .with_column("pk_col", bytes_type, column_kind::partition_key)
+                .with_column("ck_col_1", bytes_type, column_kind::clustering_key);
+            schema_ptr s = common_schema.build();
+            futurize_apply(f, log, s).get();
+        } catch (...) {
+            eptr = std::current_exception();
+        }
+
+        log.shutdown().get();
+        log.clear().get();
+
+        if (eptr) {
+            std::rethrow_exception(eptr);
+        }
     });
 }
 
@@ -77,75 +91,92 @@ static int loggo = [] {
 }();
 #endif
 
+class serializer_func_entry_writer final : public db::entry_writer {
+    db::commitlog::serializer_func _func;
+    size_t _size;
+    schema_ptr _schema;
+public:
+    serializer_func_entry_writer(schema_ptr s, size_t sz, db::commitlog::serializer_func func)
+        : _func(std::move(func)), _size(sz)
+    { }
+    virtual size_t exact_size() const override { return _size; }
+    virtual size_t estimate_size() const override { return _size; }
+    virtual void write(data_output& out) const override {
+        _func(out);
+    }
+    virtual void set_with_schema(bool) {}
+    virtual bool with_schema() const { return false; }
+    virtual schema_ptr schema() const { return _schema; }
+};
+
+commitlog::timeout_clock::time_point get_timeout_time_point(int nsec) {
+    return commitlog::timeout_clock::now() + std::chrono::seconds(nsec);
+}
+
 // just write in-memory...
-SEASTAR_TEST_CASE(test_create_commitlog){
-    return cl_test([](commitlog& log) {
-            sstring tmp = "hej bubba cow";
-            return log.add_mutation(utils::UUID_gen::get_time_UUID(), tmp.size(), [tmp](db::commitlog::output& dst) {
-                        dst.write(tmp.begin(), tmp.end());
-                    }).then([](db::replay_position rp) {
-                        BOOST_CHECK_NE(rp, db::replay_position());
-                    });
-        });
+SEASTAR_TEST_CASE(test_create_commitlog) {
+    return cl_test([](commitlog& log, schema_ptr s) {
+        sstring tmp = "hej bubba cow";
+
+        shared_ptr<db::entry_writer> cew(make_shared<serializer_func_entry_writer>(s, tmp.size(), [&tmp] (db::commitlog::output& dst) {
+            dst.write(tmp.begin(), tmp.end());
+        }));
+        db::replay_position rp = log.add_entry(s->id(), std::move(cew),  get_timeout_time_point(2)).get0();
+        BOOST_CHECK_NE(rp, db::replay_position());
+    });
 }
 
 // check we
 SEASTAR_TEST_CASE(test_commitlog_written_to_disk_batch){
     commitlog::config cfg;
     cfg.mode = commitlog::sync_mode::BATCH;
-    return cl_test(cfg, [](commitlog& log) {
-            sstring tmp = "hej bubba cow";
-            return log.add_mutation(utils::UUID_gen::get_time_UUID(), tmp.size(), [tmp](db::commitlog::output& dst) {
-                        dst.write(tmp.begin(), tmp.end());
-                    }).then([&log](replay_position rp) {
-                        BOOST_CHECK_NE(rp, db::replay_position());
-                        auto n = log.get_flush_count();
-                        BOOST_REQUIRE(n > 0);
-                    });
-        });
+    return cl_test(cfg, [](commitlog& log, schema_ptr s) {
+        sstring tmp = "hej bubba cow";
+        shared_ptr<db::entry_writer> cew(make_shared<serializer_func_entry_writer>(s, tmp.size(), [&tmp] (db::commitlog::output& dst) {
+            dst.write(tmp.begin(), tmp.end());
+        }));
+        db::replay_position rp = log.add_entry(s->id(), std::move(cew),  get_timeout_time_point(2)).get0();
+        BOOST_CHECK_NE(rp, db::replay_position());
+        auto n = log.get_flush_count();
+        BOOST_REQUIRE(n > 0);
+    });
 }
 
 SEASTAR_TEST_CASE(test_commitlog_written_to_disk_periodic){
-    return cl_test([](commitlog& log) {
-            auto state = make_lw_shared(false);
-            auto uuid = utils::UUID_gen::get_time_UUID();
-            return do_until([state]() {return *state;},
-                    [&log, state, uuid]() {
-                        sstring tmp = "hej bubba cow";
-                        return log.add_mutation(uuid, tmp.size(), [tmp](db::commitlog::output& dst) {
-                                    dst.write(tmp.begin(), tmp.end());
-                                }).then([&log, state](replay_position rp) {
-                                    BOOST_CHECK_NE(rp, db::replay_position());
-                                    auto n = log.get_flush_count();
-                                    *state = n > 0;
-                                });
-
-                    });
-        });
+    return cl_test([](commitlog& log, schema_ptr s) {
+        bool state = false;
+        sstring tmp = "hej bubba cow";
+        while (!state) {
+            shared_ptr<db::entry_writer> cew(make_shared<serializer_func_entry_writer>(s, tmp.size(), [&tmp] (db::commitlog::output& dst) {
+                dst.write(tmp.begin(), tmp.end());
+            }));
+            db::replay_position rp = log.add_entry(s->id(), std::move(cew),  get_timeout_time_point(2)).get0();
+            BOOST_CHECK_NE(rp, db::replay_position());
+            auto n = log.get_flush_count();
+            state = n > 0;
+        }
+    });
 }
 
 SEASTAR_TEST_CASE(test_commitlog_new_segment){
     commitlog::config cfg;
     cfg.commitlog_segment_size_in_mb = 1;
-    return cl_test(cfg, [](commitlog& log) {
-        return do_with(rp_set(), [&log](auto& set) {
-            auto uuid = utils::UUID_gen::get_time_UUID();
-            return do_until([&set]() { return set.size() > 1; }, [&log, &set, uuid]() {
-                sstring tmp = "hej bubba cow";
-                return log.add_mutation(uuid, tmp.size(), [tmp](db::commitlog::output& dst) {
-                    dst.write(tmp.begin(), tmp.end());
-                }).then([&set](rp_handle h) {
-                    BOOST_CHECK_NE(h.rp(), db::replay_position());
-                    set.put(std::move(h));
-                });
-            });
-        }).then([&log] {
-            auto n = log.get_active_segment_names().size();
-            BOOST_REQUIRE(n > 1);
-        });
+    return cl_test(cfg, [](commitlog& log, schema_ptr s) {
+        sstring tmp = "hej bubba cow";
+        rp_set set;
+        while (set.size() <= 1) {
+            shared_ptr<db::entry_writer> cew(make_shared<serializer_func_entry_writer>(s, tmp.size(), [&tmp] (db::commitlog::output& dst) {
+                dst.write(tmp.begin(), tmp.end());
+            }));
+            rp_handle h = log.add_entry(s->id(), std::move(cew),  get_timeout_time_point(2)).get0();
+            BOOST_CHECK_NE(h.rp(), db::replay_position());
+            set.put(std::move(h));
+        }
+
+        auto n = log.get_active_segment_names().size();
+        BOOST_REQUIRE(n > 1);
     });
 }
-
 typedef std::vector<sstring> segment_names;
 
 static segment_names segment_diff(commitlog& log, segment_names prev = {}) {
@@ -163,86 +194,93 @@ SEASTAR_TEST_CASE(test_commitlog_discard_completed_segments){
     //logging::logger_registry().set_logger_level("commitlog", logging::log_level::trace);
     commitlog::config cfg;
     cfg.commitlog_segment_size_in_mb = 1;
-    return cl_test(cfg, [](commitlog& log) {
-            struct state_type {
-                std::vector<utils::UUID> uuids;
-                std::unordered_map<utils::UUID, db::rp_set> rps;
+    return cl_test(cfg, [](commitlog& log, schema_ptr s) {
+        struct state_type {
+            std::vector<schema_ptr> cfs;
+            std::unordered_map<utils::UUID, db::rp_set> rps;
 
-                mutable size_t index = 0;
+            mutable size_t index = 0;
 
-                state_type() {
-                    for (int i = 0; i < 10; ++i) {
-                        uuids.push_back(utils::UUID_gen::get_time_UUID());
-                    }
+            state_type(schema_ptr s0) {
+                cfs.push_back(s0);
+                for (int i = 1; i < 10; ++i) {
+                    auto common_schema = schema_builder("ks", seastar::format("test{}", i))
+                            .with_column("pk_col", bytes_type, column_kind::partition_key)
+                            .with_column("ck_col_1", bytes_type, column_kind::clustering_key);
+                    schema_ptr s = common_schema.build();
+                    cfs.push_back(s);
                 }
-                const utils::UUID & next_uuid() const {
-                    return uuids[index++ % uuids.size()];
-                }
-                bool done() const {
-                    return std::any_of(rps.begin(), rps.end(), [](auto& rps) {
-                        return rps.second.size() > 1;
-                    });
-                }
-            };
+            }
 
-            auto state = make_lw_shared<state_type>();
-            return do_until([state]() { return state->done(); },
-                    [&log, state]() {
-                        sstring tmp = "hej bubba cow";
-                        auto uuid = state->next_uuid();
-                        return log.add_mutation(uuid, tmp.size(), [tmp](db::commitlog::output& dst) {
-                                    dst.write(tmp.begin(), tmp.end());
-                                }).then([state, uuid](db::rp_handle h) {
-                                    state->rps[uuid].put(std::move(h));
-                                });
-                    }).then([&log, state]() {
-                        auto names = log.get_active_segment_names();
-                        BOOST_REQUIRE(names.size() > 1);
-                        // sync all so we have no outstanding async sync ops that
-                        // might prevent discard_completed_segments to actually dispose
-                        // of clean segments (shared_ptr in task)
-                        return log.sync_all_segments().then([&log, state, names] {
-                            for (auto & p : state->rps) {
-                                log.discard_completed_segments(p.first, p.second);
-                            }
-                            auto diff = segment_diff(log, names);
-                            auto nn = diff.size();
-                            auto dn = log.get_num_segments_destroyed();
+            const schema_ptr& next_cf() const {
+                return cfs[index++ % cfs.size()];
+            }
 
-                            BOOST_REQUIRE(nn > 0);
-                            BOOST_REQUIRE(nn <= names.size());
-                            BOOST_REQUIRE(dn <= nn);
-                        });
-                    });
-        });
+            bool done() const {
+                return std::any_of(rps.begin(), rps.end(), [](auto& rps) {
+                    return rps.second.size() > 1;
+                });
+            }
+        };
+
+        state_type state(s);
+        sstring tmp = "hej bubba cow";
+        while (!state.done()) {
+            schema_ptr next_cf = state.next_cf();
+            shared_ptr<db::entry_writer> cew(make_shared<serializer_func_entry_writer>(next_cf, tmp.size(), [&tmp](db::commitlog::output& dst) {
+                dst.write(tmp.begin(), tmp.end());
+            }));
+            db::rp_handle h = log.add_entry(next_cf->id(), std::move(cew), get_timeout_time_point(2)).get0();
+            state.rps[next_cf->id()].put(std::move(h));
+        }
+
+        auto names = log.get_active_segment_names();
+        BOOST_REQUIRE(names.size() > 1);
+        // sync all so we have no outstanding async sync ops that
+        // might prevent discard_completed_segments to actually dispose
+        // of clean segments (shared_ptr in task)
+        log.sync_all_segments().get();
+
+        for (auto& p : state.rps) {
+            log.discard_completed_segments(p.first, p.second);
+        }
+        auto diff = segment_diff(log, names);
+        auto nn = diff.size();
+        auto dn = log.get_num_segments_destroyed();
+
+        BOOST_REQUIRE(nn > 0);
+        BOOST_REQUIRE(nn <= names.size());
+        BOOST_REQUIRE(dn <= nn);
+    });
 }
 
-SEASTAR_TEST_CASE(test_equal_record_limit){
-    return cl_test([](commitlog& log) {
-            auto size = log.max_record_size();
-            return log.add_mutation(utils::UUID_gen::get_time_UUID(), size, [size](db::commitlog::output& dst) {
-                        dst.write(char(1), size);
-                    }).then([](db::replay_position rp) {
-                        BOOST_CHECK_NE(rp, db::replay_position());
-                    });
-        });
+SEASTAR_TEST_CASE(test_equal_record_limit) {
+    return cl_test([](commitlog& log, schema_ptr s) {
+        auto size = log.max_record_size();
+
+        shared_ptr<db::entry_writer> cew(make_shared<serializer_func_entry_writer>(s, size, [size] (db::commitlog::output& dst) {
+            dst.write(char(1), size);
+        }));
+        db::replay_position rp = log.add_entry(s->id(), std::move(cew),  get_timeout_time_point(2)).get0();
+        BOOST_CHECK_NE(rp, db::replay_position());
+    });
 }
 
 SEASTAR_TEST_CASE(test_exceed_record_limit){
-    return cl_test([](commitlog& log) {
-            auto size = log.max_record_size() + 1;
-            return log.add_mutation(utils::UUID_gen::get_time_UUID(), size, [size](db::commitlog::output& dst) {
-                        dst.write(char(1), size);
-                    }).then_wrapped([](future<db::rp_handle> f) {
-                        try {
-                            f.get();
-                        } catch (...) {
-                            // ok.
-                            return make_ready_future();
-                        }
-                        throw std::runtime_error("Did not get expected exception from writing too large record");
-                    });
-        });
+    return cl_test([](commitlog& log, schema_ptr s) {
+        auto size = log.max_record_size() + 1;
+
+        shared_ptr<db::entry_writer> cew(make_shared<serializer_func_entry_writer>(s, size, [size] (db::commitlog::output& dst) {
+            dst.write(char(1), size);
+        }));
+        try {
+            log.add_entry(s->id(), std::move(cew), get_timeout_time_point(2)).get0();
+        } catch (...) {
+            // ok.
+            return;
+        }
+        throw std::runtime_error("Did not get expected exception from writing too large record");
+    });
 }
 
 SEASTAR_TEST_CASE(test_commitlog_delete_when_over_disk_limit) {
@@ -250,39 +288,37 @@ SEASTAR_TEST_CASE(test_commitlog_delete_when_over_disk_limit) {
     cfg.commitlog_segment_size_in_mb = 2;
     cfg.commitlog_total_space_in_mb = 1;
     cfg.commitlog_sync_period_in_ms = 1;
-    return cl_test(cfg, [](commitlog& log) {
-            auto sem = make_lw_shared<semaphore>(0);
-            auto segments = make_lw_shared<segment_names>();
+    return cl_test(cfg, [](commitlog& log, schema_ptr s) {
+        semaphore sem(0);
+        segment_names segments;
 
-            // add a flush handler that simply says we're done with the range.
-            auto r = log.add_flush_handler([&log, sem, segments](cf_id_type id, replay_position pos) {
-                *segments = log.get_active_segment_names();
-                log.discard_completed_segments(id);
-                sem->signal();
-            });
-
-            auto set = make_lw_shared<std::set<segment_id_type>>();
-            auto uuid = utils::UUID_gen::get_time_UUID();
-            return do_until([set, sem]() {return set->size() > 2 && sem->try_wait();},
-                    [&log, set, uuid]() {
-                        sstring tmp = "hej bubba cow";
-                        return log.add_mutation(uuid, tmp.size(), [tmp](db::commitlog::output& dst) {
-                                    dst.write(tmp.begin(), tmp.end());
-                                }).then([set](rp_handle h) {
-                                    BOOST_CHECK_NE(h.rp(), db::replay_position());
-                                    set->insert(h.release().id);
-                                });
-                    }).then([&log, segments]() {
-                        auto diff = segment_diff(log, *segments);
-                        auto nn = diff.size();
-                        auto dn = log.get_num_segments_destroyed();
-
-                        BOOST_REQUIRE(nn > 0);
-                        BOOST_REQUIRE(nn <= segments->size());
-                        BOOST_REQUIRE(dn <= nn);
-                    }).finally([r = std::move(r)] {
-                    });
+        // add a flush handler that simply says we're done with the range.
+        auto r = log.add_flush_handler([&log, &sem, &segments](cf_id_type id, replay_position pos) {
+            segments = log.get_active_segment_names();
+            log.discard_completed_segments(id);
+            sem.signal();
         });
+
+        std::set<segment_id_type> set;
+        sstring tmp = "hej bubba cow";
+
+        while (!(set.size() > 2 && sem.try_wait())) {
+            shared_ptr<db::entry_writer> cew(make_shared<serializer_func_entry_writer>(s, tmp.size(), [&tmp](db::commitlog::output& dst) {
+                dst.write(tmp.begin(), tmp.end());
+            }));
+            db::rp_handle h = log.add_entry(s->id(), std::move(cew), get_timeout_time_point(2)).get0();
+            BOOST_CHECK_NE(h.rp(), db::replay_position());
+            set.insert(h.release().id);
+        }
+
+        auto diff = segment_diff(log, segments);
+        auto nn = diff.size();
+        auto dn = log.get_num_segments_destroyed();
+
+        BOOST_REQUIRE(nn > 0);
+        BOOST_REQUIRE(nn <= segments.size());
+        BOOST_REQUIRE(dn <= nn);
+    });
 }
 
 SEASTAR_TEST_CASE(test_commitlog_reader){
@@ -303,53 +339,48 @@ SEASTAR_TEST_CASE(test_commitlog_reader){
     };
     commitlog::config cfg;
     cfg.commitlog_segment_size_in_mb = 1;
-    return cl_test(cfg, [](commitlog& log) {
-            auto set = make_lw_shared<rp_set>();
-            auto count = make_lw_shared<size_t>(0);
-            auto count2 = make_lw_shared<size_t>(0);
-            auto uuid = utils::UUID_gen::get_time_UUID();
-            return do_until([count, set]() {return set->size() > 1;},
-                    [&log, uuid, count, set]() {
-                        sstring tmp = "hej bubba cow";
-                        return log.add_mutation(uuid, tmp.size(), [tmp](db::commitlog::output& dst) {
-                                    dst.write(tmp.begin(), tmp.end());
-                                }).then([&log, set, count](auto h) {
-                                    BOOST_CHECK_NE(db::replay_position(), h.rp());
-                                    set->put(std::move(h));
-                                    if (set->size() == 1) {
-                                        ++(*count);
-                                    }
-                                });
+    return cl_test(cfg, [](commitlog& log, schema_ptr s) {
+        rp_set set;
+        size_t count = 0;
+        sstring tmp = "hej bubba cow";
 
-                    }).then([&log, set, count2]() {
-                        auto segments = log.get_active_segment_names();
-                        BOOST_REQUIRE(segments.size() > 1);
+        while (set.size() <= 1) {
+            shared_ptr<db::entry_writer> cew(make_shared<serializer_func_entry_writer>(s, tmp.size(), [&tmp](db::commitlog::output& dst) {
+                dst.write(tmp.begin(), tmp.end());
+            }));
+            db::rp_handle h = log.add_entry(s->id(), std::move(cew), get_timeout_time_point(2)).get0();
 
-                        auto ids = boost::copy_range<std::vector<segment_id_type>>(set->usage() | boost::adaptors::map_keys);
-                        std::sort(ids.begin(), ids.end());
-                        auto id = ids.front();
-                        auto i = std::find_if(segments.begin(), segments.end(), [id](sstring filename) {
-                            commitlog::descriptor desc(filename);
-                            return desc.id == id;
-                        });
-                        if (i == segments.end()) {
-                            throw std::runtime_error("Did not find expected log file");
-                        }
-                        return *i;
-                    }).then([&log, count] (sstring segment_path) {
-                        // Check reading from an unsynced segment
-                        return count_mutations_in_segment(segment_path).then([count] (size_t replay_count) {
-                            BOOST_CHECK_GE(*count, replay_count);
-                        }).then([&log, count, segment_path] {
-                            return log.sync_all_segments().then([count, segment_path] {
-                                // Check reading from a synced segment
-                                return count_mutations_in_segment(segment_path).then([count] (size_t replay_count) {
-                                    BOOST_CHECK_EQUAL(*count, replay_count);
-                                });
-                            });
-                        });
-                    });
+            BOOST_CHECK_NE(db::replay_position(), h.rp());
+            set.put(std::move(h));
+            if (set.size() == 1) {
+                ++count;
+            }
+        }
+
+        auto segments = log.get_active_segment_names();
+        BOOST_REQUIRE(segments.size() > 1);
+
+        auto ids = boost::copy_range<std::vector<segment_id_type>>(set.usage() | boost::adaptors::map_keys);
+        std::sort(ids.begin(), ids.end());
+        auto id = ids.front();
+        auto i = std::find_if(segments.begin(), segments.end(), [&id](sstring filename) {
+            commitlog::descriptor desc(filename);
+            return desc.id == id;
         });
+        if (i == segments.end()) {
+            throw std::runtime_error("Did not find expected log file");
+        }
+        auto segment_path = *i;
+        // Check reading from an unsynced segment
+        size_t replay_count = count_mutations_in_segment(segment_path).get0();
+
+        BOOST_CHECK_GE(count, replay_count);
+
+        log.sync_all_segments().get();
+        replay_count = count_mutations_in_segment(segment_path).get0();
+
+        BOOST_CHECK_EQUAL(count, replay_count);
+    });
 }
 
 static future<> corrupt_segment(sstring seg, uint64_t off, uint32_t value) {
@@ -369,130 +400,124 @@ static future<> corrupt_segment(sstring seg, uint64_t off, uint32_t value) {
 SEASTAR_TEST_CASE(test_commitlog_entry_corruption){
     commitlog::config cfg;
     cfg.commitlog_segment_size_in_mb = 1;
-    return cl_test(cfg, [](commitlog& log) {
-        auto rps = make_lw_shared<std::vector<db::replay_position>>();
-        return do_until([rps]() {return rps->size() > 1;},
-                    [&log, rps]() {
-                        auto uuid = utils::UUID_gen::get_time_UUID();
-                        sstring tmp = "hej bubba cow";
-                        return log.add_mutation(uuid, tmp.size(), [tmp](db::commitlog::output& dst) {
-                                    dst.write(tmp.begin(), tmp.end());
-                                }).then([&log, rps](rp_handle h) {
-                                    BOOST_CHECK_NE(h.rp(), db::replay_position());
-                                    rps->push_back(h.release());
-                                });
-                    }).then([&log]() {
-                        return log.sync_all_segments();
-                    }).then([&log, rps] {
-                        auto segments = log.get_active_segment_names();
-                        BOOST_REQUIRE(!segments.empty());
-                        auto seg = segments[0];
-                        return corrupt_segment(seg, rps->at(1).pos + 4, 0x451234ab).then([seg, rps, &log] {
-                            return db::commitlog::read_log_file(seg, [rps](temporary_buffer<char> buf, db::replay_position rp) {
-                                BOOST_CHECK_EQUAL(rp, rps->at(0));
-                                return make_ready_future<>();
-                            }).then([](auto s) {
-                                return do_with(std::move(s), [](auto& s) {
-                                    return s->done();
-                                });
-                            }).then_wrapped([](auto&& f) {
-                                try {
-                                    f.get();
-                                    BOOST_FAIL("Expected exception");
-                                } catch (commitlog::segment_data_corruption_error& e) {
-                                    // ok.
-                                    BOOST_REQUIRE(e.bytes() > 0);
-                                }
-                            });
-                        });
-                    });
-        });
+    return cl_test(cfg, [](commitlog& log, schema_ptr s) {
+        std::vector<db::replay_position> rps;
+        sstring tmp = "hej bubba cow";
+
+        while (rps.size() <= 1) {
+            shared_ptr<db::entry_writer> cew(make_shared<serializer_func_entry_writer>(s, tmp.size(), [&tmp](db::commitlog::output& dst) {
+                dst.write(tmp.begin(), tmp.end());
+            }));
+            db::rp_handle h = log.add_entry(s->id(), std::move(cew), get_timeout_time_point(2)).get0();
+
+            BOOST_CHECK_NE(h.rp(), db::replay_position());
+            rps.push_back(h.release());
+        }
+
+        log.sync_all_segments().get();
+
+        auto segments = log.get_active_segment_names();
+        BOOST_REQUIRE(!segments.empty());
+        auto seg = segments[0];
+
+        corrupt_segment(seg, rps.at(1).pos + 4, 0x451234ab).get();
+
+        try {
+            auto sb = db::commitlog::read_log_file(seg, [&rps](temporary_buffer<char> buf, db::replay_position rp) {
+                BOOST_CHECK_EQUAL(rp, rps.at(0));
+                return make_ready_future<>();
+            }).get0();
+
+            sb->done().get();
+            BOOST_FAIL("Expected exception");
+        } catch (commitlog::segment_data_corruption_error& e) {
+            // ok.
+            BOOST_REQUIRE(e.bytes() > 0);
+        }
+    });
 }
+
 
 SEASTAR_TEST_CASE(test_commitlog_chunk_corruption){
     commitlog::config cfg;
     cfg.commitlog_segment_size_in_mb = 1;
-    return cl_test(cfg, [](commitlog& log) {
-        auto rps = make_lw_shared<std::vector<db::replay_position>>();
-        return do_until([rps]() {return rps->size() > 1;},
-                    [&log, rps]() {
-                        auto uuid = utils::UUID_gen::get_time_UUID();
-                        sstring tmp = "hej bubba cow";
-                        return log.add_mutation(uuid, tmp.size(), [tmp](db::commitlog::output& dst) {
-                                    dst.write(tmp.begin(), tmp.end());
-                                }).then([&log, rps](rp_handle h) {
-                                    BOOST_CHECK_NE(h.rp(), db::replay_position());
-                                    rps->push_back(h.release());
-                                });
-                    }).then([&log]() {
-                        return log.sync_all_segments();
-                    }).then([&log, rps] {
-                        auto segments = log.get_active_segment_names();
-                        BOOST_REQUIRE(!segments.empty());
-                        auto seg = segments[0];
-                        return corrupt_segment(seg, rps->at(0).pos - 4, 0x451234ab).then([seg, rps, &log] {
-                            return db::commitlog::read_log_file(seg, [rps](temporary_buffer<char> buf, db::replay_position rp) {
-                                BOOST_FAIL("Should not reach");
-                                return make_ready_future<>();
-                            }).then([](auto s) {
-                                return do_with(std::move(s), [](auto& s) {
-                                    return s->done();
-                                });
-                            }).then_wrapped([](auto&& f) {
-                                try {
-                                    f.get();
-                                    BOOST_FAIL("Expected exception");
-                                } catch (commitlog::segment_data_corruption_error& e) {
-                                    // ok.
-                                    BOOST_REQUIRE(e.bytes() > 0);
-                                }
-                            });
-                        });
-                    });
-        });
+    return cl_test(cfg, [](commitlog& log, schema_ptr s) {
+        std::vector<db::replay_position> rps;
+        sstring tmp = "hej bubba cow";
+
+        while (rps.size() <= 1) {
+            shared_ptr<db::entry_writer> cew(make_shared<serializer_func_entry_writer>(s, tmp.size(), [&tmp](db::commitlog::output& dst) {
+                dst.write(tmp.begin(), tmp.end());
+            }));
+            db::rp_handle h = log.add_entry(s->id(), std::move(cew), get_timeout_time_point(2)).get0();
+
+            BOOST_CHECK_NE(h.rp(), db::replay_position());
+            rps.push_back(h.release());
+        }
+
+        log.sync_all_segments().get();
+
+        auto segments = log.get_active_segment_names();
+        BOOST_REQUIRE(!segments.empty());
+        auto seg = segments[0];
+
+        corrupt_segment(seg, rps.at(0).pos - 4, 0x451234ab).get();
+
+        try {
+            auto sb = db::commitlog::read_log_file(seg, [&rps](temporary_buffer<char> buf, db::replay_position rp) {
+                BOOST_FAIL("Should not reach");
+                return make_ready_future<>();
+            }).get0();
+
+            sb->done().get();
+            BOOST_FAIL("Expected exception");
+        } catch (commitlog::segment_data_corruption_error& e) {
+            // ok.
+            BOOST_REQUIRE(e.bytes() > 0);
+        }
+    });
 }
+
 
 SEASTAR_TEST_CASE(test_commitlog_reader_produce_exception){
     commitlog::config cfg;
     cfg.commitlog_segment_size_in_mb = 1;
-    return cl_test(cfg, [](commitlog& log) {
-        auto rps = make_lw_shared<std::vector<db::replay_position>>();
-        return do_until([rps]() {return rps->size() > 1;},
-                    [&log, rps]() {
-                        auto uuid = utils::UUID_gen::get_time_UUID();
-                        sstring tmp = "hej bubba cow";
-                        return log.add_mutation(uuid, tmp.size(), [tmp](db::commitlog::output& dst) {
-                                    dst.write(tmp.begin(), tmp.end());
-                                }).then([&log, rps](rp_handle h) {
-                                    BOOST_CHECK_NE(h.rp(), db::replay_position());
-                                    rps->push_back(h.release());
-                                });
-                    }).then([&log]() {
-                        return log.sync_all_segments();
-                    }).then([&log] {
-                        auto segments = log.get_active_segment_names();
-                        BOOST_REQUIRE(!segments.empty());
-                        auto seg = segments[0];
-                        return db::commitlog::read_log_file(seg, [](temporary_buffer<char> buf, db::replay_position rp) {
-                            return make_exception_future(std::runtime_error("I am in a throwing mode"));
-                        }).then([](auto s) {
-                            return do_with(std::move(s), [](auto& s) {
-                                return s->done();
-                            });
-                        }).then_wrapped([](auto&& f) {
-                            try {
-                                f.get();
-                                BOOST_FAIL("Expected exception");
-                            } catch (std::runtime_error&) {
-                                // Ok
-                            } catch (...) {
-                                // ok.
-                                BOOST_FAIL("Wrong exception");
-                            }
-                        });
-                    });
-        });
+    return cl_test(cfg, [](commitlog& log, schema_ptr s) {
+        std::vector<db::replay_position> rps;
+        sstring tmp = "hej bubba cow";
+
+        while (rps.size() <= 1) {
+            shared_ptr<db::entry_writer> cew(make_shared<serializer_func_entry_writer>(s, tmp.size(), [&tmp](db::commitlog::output& dst) {
+                dst.write(tmp.begin(), tmp.end());
+            }));
+            db::rp_handle h = log.add_entry(s->id(), std::move(cew), get_timeout_time_point(2)).get0();
+            BOOST_CHECK_NE(h.rp(), db::replay_position());
+            rps.push_back(h.release());
+        }
+
+        log.sync_all_segments().get();
+
+        auto segments = log.get_active_segment_names();
+        BOOST_REQUIRE(!segments.empty());
+        auto seg = segments[0];
+
+        try {
+            auto sb = db::commitlog::read_log_file(seg, [&rps](temporary_buffer<char> buf, db::replay_position rp) {
+                return make_exception_future(std::runtime_error("I am in a throwing mode"));
+            }).get0();
+
+            sb->done().get();
+            BOOST_FAIL("Expected exception");
+        } catch(std::runtime_error&) {
+            // Ok
+            return;
+        } catch(...) {
+            // Not ok!
+            BOOST_FAIL("Wrong exception");
+        }
+    });
 }
+
 
 SEASTAR_TEST_CASE(test_commitlog_counters) {
     auto count_cl_counters = []() -> size_t {
@@ -502,7 +527,7 @@ SEASTAR_TEST_CASE(test_commitlog_counters) {
         });
     };
     BOOST_CHECK_EQUAL(count_cl_counters(), 0);
-    return cl_test([count_cl_counters](commitlog& log) {
+    return cl_test([count_cl_counters](commitlog& log, schema_ptr s) {
         BOOST_CHECK_GT(count_cl_counters(), 0);
     }).finally([count_cl_counters] {
         BOOST_CHECK_EQUAL(count_cl_counters(), 0);
@@ -512,32 +537,31 @@ SEASTAR_TEST_CASE(test_commitlog_counters) {
 #ifndef DEFAULT_ALLOCATOR
 
 SEASTAR_TEST_CASE(test_allocation_failure){
-    return cl_test([](commitlog& log) {
-            auto size = log.max_record_size() - 1;
+    return cl_test([](commitlog& log, schema_ptr s) {
+        auto size = log.max_record_size() - 1;
+        std::list<std::unique_ptr<char[]>> junk;
 
-            auto junk = make_lw_shared<std::list<std::unique_ptr<char[]>>>();
-
-            // Use us loads of memory so we can OOM at the appropriate place
-            try {
-                for (;;) {
-                    junk->emplace_back(new char[size]);
-                }
-            } catch (std::bad_alloc&) {
+        // Use us loads of memory so we can OOM at the appropriate place
+        try {
+            for (;;) {
+                junk.emplace_back(new char[size]);
             }
-            return log.add_mutation(utils::UUID_gen::get_time_UUID(), size, [size](db::commitlog::output& dst) {
-                        dst.write(char(1), size);
-                    }).then_wrapped([junk](future<db::rp_handle> f) {
-                        try {
-                            f.get();
-                        } catch (std::bad_alloc&) {
-                            // ok. this is what we expected
-                            junk->clear();
-                            return make_ready_future();
-                        } catch (...) {
-                        }
-                        throw std::runtime_error("Did not get expected exception from writing too large record");
-                    });
-        });
+        } catch (std::bad_alloc&) {
+        }
+
+        try {
+            shared_ptr<db::entry_writer> cew(make_shared<serializer_func_entry_writer>(s, size, [size](db::commitlog::output& dst) {
+                dst.write(char(1), size);
+            }));
+            log.add_entry(s->id(), std::move(cew), get_timeout_time_point(2)).get0();
+        } catch (std::bad_alloc&) {
+            // ok. this is what we expected
+            junk.clear();
+            return;
+        } catch (...) {
+        }
+        throw std::runtime_error("Did not get expected exception from writing too large record");
+    });
 }
 
 #endif
