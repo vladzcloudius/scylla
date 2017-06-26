@@ -44,9 +44,10 @@ struct entry_writer {
     // Returns segment-independent size of the entry. Must be <= than segment-dependant size.
     virtual size_t estimate_size() const = 0;
     virtual void write(data_output&) const = 0;
-    virtual void set_with_schema(bool) {}
-    virtual bool with_schema() const { return false; }
-    virtual schema_ptr schema() const { return nullptr; }
+    virtual void set_with_schema(bool) = 0;
+    virtual bool with_schema() const = 0;
+    virtual schema_ptr schema() const = 0;
+    virtual ~entry_writer() {}
 };
 
 /// \class commitlog_file_entry_writer

@@ -51,32 +51,62 @@ thread_local disk_error_signal_type general_disk_error;
 
 using namespace db;
 
+#if 1
 template<typename Func>
 static future<> cl_test(commitlog::config cfg, Func && f) {
-    return seastar::async([cfg = std::move(cfg), f = std::move(f)] () mutable {
-        tmpdir tmp;
-        cfg.commit_log_location = tmp.path;
+    tmpdir tmp;
+    sstring clog_path = tmp.path;
+    return seastar::async([cfg = std::move(cfg), f = std::forward<Func>(f), clog_path = std::move(clog_path)] () mutable {
+        cfg.commit_log_location = clog_path;
         commitlog log = commitlog::create_commitlog(cfg).get0();
+        storage_service_for_tests ssft;
         std::exception_ptr eptr;
         try {
-            storage_service_for_tests ssft;
             auto common_schema = schema_builder("ks", "test")
                 .with_column("pk_col", bytes_type, column_kind::partition_key)
                 .with_column("ck_col_1", bytes_type, column_kind::clustering_key);
             schema_ptr s = common_schema.build();
-            futurize_apply(f, log, s).get();
+            futurize_apply(f, log, std::move(s)).get();
         } catch (...) {
+            printf("\t\tReceived exception\n");
             eptr = std::current_exception();
         }
 
+        printf("\t\tBefore log.shutdown()\n");
         log.shutdown().get();
+        printf("\t\tBefore log.clear()\n");
         log.clear().get();
 
         if (eptr) {
             std::rethrow_exception(eptr);
         }
+    }).finally([tmp = std::move(tmp)] {});
+}
+
+#else
+template<typename Func>
+static future<> cl_test(commitlog::config cfg, Func && f) {
+    return seastar::async([cfg = std::move(cfg), f = std::forward<Func>(f)] () mutable {
+        tmpdir tmp;
+        cfg.commit_log_location = tmp.path;
+        storage_service_for_tests ssft;
+        auto common_schema = schema_builder("ks", "test")
+            .with_column("pk_col", bytes_type, column_kind::partition_key)
+            .with_column("ck_col_1", bytes_type, column_kind::clustering_key);
+        schema_ptr s = common_schema.build();
+        commitlog::create_commitlog(cfg).then([f = std::forward<Func>(f), s = std::move(s)](commitlog log) mutable {
+            return do_with(std::move(log), [f = std::forward<Func>(f), s = std::move(s)](commitlog& log) {
+                return futurize_apply(f, log, std::move(s)).finally([&log] {
+                    return log.shutdown().then([&log] {
+                        return log.clear();
+                    });
+                });
+            });
+        }).finally([tmp = std::move(tmp)] {
+        }).get();
     });
 }
+#endif
 
 template<typename Func>
 static future<> cl_test(Func && f) {
@@ -97,8 +127,9 @@ class serializer_func_entry_writer final : public db::entry_writer {
     schema_ptr _schema;
 public:
     serializer_func_entry_writer(schema_ptr s, size_t sz, db::commitlog::serializer_func func)
-        : _func(std::move(func)), _size(sz)
+        : _func(std::move(func)), _size(sz), _schema(s)
     { }
+    virtual ~serializer_func_entry_writer() {}
     virtual size_t exact_size() const override { return _size; }
     virtual size_t estimate_size() const override { return _size; }
     virtual void write(data_output& out) const override {
@@ -113,6 +144,7 @@ commitlog::timeout_clock::time_point get_timeout_time_point(int nsec) {
     return commitlog::timeout_clock::now() + std::chrono::seconds(nsec);
 }
 
+#if 0
 // just write in-memory...
 SEASTAR_TEST_CASE(test_create_commitlog) {
     return cl_test([](commitlog& log, schema_ptr s) {
@@ -195,6 +227,7 @@ SEASTAR_TEST_CASE(test_commitlog_discard_completed_segments){
     commitlog::config cfg;
     cfg.commitlog_segment_size_in_mb = 1;
     return cl_test(cfg, [](commitlog& log, schema_ptr s) {
+        printf("test_commitlog_discard_completed_segments\n");
         struct state_type {
             std::vector<schema_ptr> cfs;
             std::unordered_map<utils::UUID, db::rp_set> rps;
@@ -255,6 +288,7 @@ SEASTAR_TEST_CASE(test_commitlog_discard_completed_segments){
 }
 
 SEASTAR_TEST_CASE(test_equal_record_limit) {
+    printf("test_equal_record_limit\n");
     return cl_test([](commitlog& log, schema_ptr s) {
         auto size = log.max_record_size();
 
@@ -263,32 +297,67 @@ SEASTAR_TEST_CASE(test_equal_record_limit) {
         }));
         db::replay_position rp = log.add_entry(s->id(), std::move(cew),  get_timeout_time_point(2)).get0();
         BOOST_CHECK_NE(rp, db::replay_position());
+
+        printf("test_equal_record_limit end\n");
+
     });
 }
+#else
+//typedef std::vector<sstring> segment_names;
+//static segment_names segment_diff(commitlog& log, segment_names prev = {}) {
+//    segment_names now = log.get_active_segment_names();
+//    segment_names diff;
+//    // safety fix. We should always get segment names in alphabetical order, but
+//    // we're not explicitly guaranteed it. Lets sort the sets just to be sure.
+//    std::sort(now.begin(), now.end());
+//    std::sort(prev.begin(), prev.end());
+//    std::set_difference(prev.begin(), prev.end(), now.begin(), now.end(), std::back_inserter(diff));
+//    return diff;
+//}
+
+#endif
 
 SEASTAR_TEST_CASE(test_exceed_record_limit){
-    return cl_test([](commitlog& log, schema_ptr s) {
+    commitlog::config cfg;
+    cfg.commitlog_total_space_in_mb = 1;
+    cfg.commitlog_segment_size_in_mb = 1;
+    return cl_test(cfg, [](commitlog& log, schema_ptr s) {
         auto size = log.max_record_size() + 1;
+        printf("test_exceed_record_limit: %ld\n", size);
+#if 1
 
         shared_ptr<db::entry_writer> cew(make_shared<serializer_func_entry_writer>(s, size, [size] (db::commitlog::output& dst) {
+            printf("\tbefore writing\n");
             dst.write(char(1), size);
+            printf("\tafter writing\n");
         }));
+        rp_set set;
+
+        set.put(log.add_entry(s->id(), cew, get_timeout_time_point(2)).get0());
+
         try {
-            log.add_entry(s->id(), std::move(cew), get_timeout_time_point(2)).get0();
-        } catch (...) {
+            printf("\tbefore add_entry()\n");
+            set.put(log.add_entry(s->id(), cew, get_timeout_time_point(2)).get0());
+            printf("\tafter add_entry()\n");
+        } catch (std::exception& e) {
             // ok.
+            printf("\tGot exception - all is good! %s\n", e.what());
             return;
         }
+#endif
         throw std::runtime_error("Did not get expected exception from writing too large record");
+        printf("test_exceed_record_limit end\n");
     });
 }
 
+#if 0
 SEASTAR_TEST_CASE(test_commitlog_delete_when_over_disk_limit) {
     commitlog::config cfg;
     cfg.commitlog_segment_size_in_mb = 2;
     cfg.commitlog_total_space_in_mb = 1;
     cfg.commitlog_sync_period_in_ms = 1;
     return cl_test(cfg, [](commitlog& log, schema_ptr s) {
+        printf("test_commitlog_delete_when_over_disk_limit\n");
         semaphore sem(0);
         segment_names segments;
 
@@ -563,5 +632,5 @@ SEASTAR_TEST_CASE(test_allocation_failure){
         throw std::runtime_error("Did not get expected exception from writing too large record");
     });
 }
-
+#endif
 #endif

@@ -74,6 +74,7 @@ static future<> cl_test(Func && f) {
     return cl_test(cfg, std::forward<Func>(f));
 }
 
+#if 0
 SEASTAR_TEST_CASE(test_commitlog_new_segment_custom_prefix){
     commitlog::config cfg;
     cfg.fname_prefix = "HintedLog-0-kaka-";
@@ -97,6 +98,8 @@ SEASTAR_TEST_CASE(test_commitlog_new_segment_custom_prefix){
         });
     });
 }
+
+#endif
 
 bool operator==(const column_mapping_entry& a, const column_mapping_entry& b) {
     return a.name() == b.name() && a.type_name() == b.type_name();

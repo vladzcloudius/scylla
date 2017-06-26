@@ -176,36 +176,6 @@ public:
     using serializer_func = std::function<void(output&)>;
 
     /**
-     * Add a "Mutation" to the commit log.
-     *
-     * Resolves with timed_out_error when timeout is reached.
-     *
-     * @param mutation_func a function that writes 'size' bytes to the log, representing the mutation.
-     */
-    future<rp_handle> add(const cf_id_type& id, size_t size, timeout_clock::time_point timeout, serializer_func mutation_func);
-
-    /**
-     * Template version of add.
-     * Resolves with timed_out_error when timeout is reached.
-     * @param mu an invokable op that generates the serialized data. (Of size bytes)
-     */
-    template<typename _MutationOp>
-    future<rp_handle> add_mutation(const cf_id_type& id, size_t size, timeout_clock::time_point timeout, _MutationOp&& mu) {
-        return add(id, size, timeout, [mu = std::forward<_MutationOp>(mu)](output& out) {
-            mu(out);
-        });
-    }
-
-    /**
-     * Template version of add.
-     * @param mu an invokable op that generates the serialized data. (Of size bytes)
-     */
-    template<typename _MutationOp>
-    future<rp_handle> add_mutation(const cf_id_type& id, size_t size, _MutationOp&& mu) {
-        return add_mutation(id, size, timeout_clock::time_point::max(), std::forward<_MutationOp>(mu));
-    }
-
-    /**
      * Add an entry to the commit log.
      * Resolves with timed_out_error when timeout is reached.
      * @param entry_writer a writer responsible for writing the entry

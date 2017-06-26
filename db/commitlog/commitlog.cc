@@ -754,6 +754,7 @@ public:
         }
 
         writer->set_with_schema(!is_schema_version_known(writer->schema()));
+        printf("\tgetting exact size\n");
         const auto size = writer->exact_size();
         const auto s = size + entry_overhead_size; // total size
         auto ep = _segment_manager->sanity_check_size(s);
@@ -761,6 +762,7 @@ public:
             return make_exception_future<rp_handle>(std::move(ep));
         }
 
+        printf("\tmark1\n");
 
         if (!is_still_allocating() || position() + s > _segment_manager->max_size) { // would we make the file too big?
             return finish_and_get_new(timeout).then([id, writer = std::move(writer), permit = std::move(permit), timeout] (auto new_seg) mutable {
@@ -781,6 +783,8 @@ public:
                 });
             }
         }
+
+        printf("\tmark2\n");
 
         size_t buf_memory = s;
         if (_buffer.empty()) {
@@ -805,11 +809,14 @@ public:
         data_output out(p, e);
         crc32_nbo crc;
 
+        printf("\tmark3\n");
+
         out.write(uint32_t(s));
         crc.process(uint32_t(s));
         out.write(crc.checksum());
 
         // actual data
+        printf("\tbefore writing\n");
         if (writer->with_schema()) {
             add_schema_version(writer->schema());
         }
@@ -1452,28 +1459,6 @@ void db::commitlog::segment_manager::release_buffer(buffer_type&& b) {
     totals.buffer_list_bytes = boost::accumulate(
 	    _temp_buffers | boost::adaptors::transformed(std::mem_fn(&buffer_type::size)),
             size_t(0), std::plus<size_t>());
-}
-
-/**
- * Add mutation.
- */
-future<db::rp_handle> db::commitlog::add(const cf_id_type& id,
-        size_t size, commitlog::timeout_clock::time_point timeout, serializer_func func) {
-    class serializer_func_entry_writer final : public entry_writer {
-        serializer_func _func;
-        size_t _size;
-    public:
-        serializer_func_entry_writer(size_t sz, serializer_func func)
-            : _func(std::move(func)), _size(sz)
-        { }
-        virtual size_t exact_size() const override { return _size; }
-        virtual size_t estimate_size() const override { return _size; }
-        virtual void write(output& out) const override {
-            _func(out);
-        }
-    };
-    auto writer = ::make_shared<serializer_func_entry_writer>(size, std::move(func));
-    return _segment_manager->allocate_when_possible(id, writer, timeout);
 }
 
 future<db::rp_handle> db::commitlog::add_entry(const cf_id_type& id, shared_ptr<db::entry_writer> writer, timeout_clock::time_point timeout)
