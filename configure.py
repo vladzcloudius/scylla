@@ -294,6 +294,7 @@ add_tristate(arg_parser, name = 'xen', dest = 'xen', help = 'Xen support')
 arg_parser.add_argument('--enable-gcc6-concepts', dest='gcc6_concepts', action='store_true', default=False,
                         help='enable experimental support for C++ Concepts as implemented in GCC 6')
 arg_parser.add_argument('--page-bits', dest = 'pagebits', help = 'Memory page bits', type=int)
+arg_parser.add_argument('--cache-line-size', dest = 'cache_line_size', help = 'CPU cache line size', type=int)
 args = arg_parser.parse_args()
 
 defines = []
@@ -773,6 +774,8 @@ if target != '':
 seastar_flags += ['--compiler', args.cxx, '--c-compiler', args.cc, '--cflags=%s' % (seastar_cflags)]
 if args.pagebits:
     seastar_flags += ["--page-bits={}".format(args.pagebits)]
+if args.cache_line_size:
+    seastar_flags += ["--cache-line-size={}".format(args.cache_line_size)]
 
 status = subprocess.call([python, './configure.py'] + seastar_flags, cwd = 'seastar')
 
