@@ -293,6 +293,7 @@ add_tristate(arg_parser, name = 'hwloc', dest = 'hwloc', help = 'hwloc support')
 add_tristate(arg_parser, name = 'xen', dest = 'xen', help = 'Xen support')
 arg_parser.add_argument('--enable-gcc6-concepts', dest='gcc6_concepts', action='store_true', default=False,
                         help='enable experimental support for C++ Concepts as implemented in GCC 6')
+arg_parser.add_argument('--page-bits', dest = 'pagebits', help = 'Memory page bits', type=int)
 args = arg_parser.parse_args()
 
 defines = []
@@ -770,6 +771,8 @@ seastar_cflags = args.user_cflags
 if target != '':
     seastar_cflags += ' -march=' + target
 seastar_flags += ['--compiler', args.cxx, '--c-compiler', args.cc, '--cflags=%s' % (seastar_cflags)]
+if args.pagebits:
+    seastar_flags += ["--page-bits={}".format(args.pagebits)]
 
 status = subprocess.call([python, './configure.py'] + seastar_flags, cwd = 'seastar')
 
