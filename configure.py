@@ -304,6 +304,7 @@ add_tristate(arg_parser, name = 'hwloc', dest = 'hwloc', help = 'hwloc support')
 add_tristate(arg_parser, name = 'xen', dest = 'xen', help = 'Xen support')
 arg_parser.add_argument('--enable-gcc6-concepts', dest='gcc6_concepts', action='store_true', default=False,
                         help='enable experimental support for C++ Concepts as implemented in GCC 6')
+arg_parser.add_argument('--huge-page-size-mb', dest = 'huge_page_size_mb', help = 'Huge page size in MB', type=int, default=2)
 arg_parser.add_argument('--allocator-page-size', dest = 'allocator_page_size', help = 'Override seastar\'s allocator page size', type=int)
 args = arg_parser.parse_args()
 
@@ -803,6 +804,8 @@ seastar_ldflags = args.user_ldflags
 seastar_flags += ['--compiler', args.cxx, '--c-compiler', args.cc, '--cflags=%s' % (seastar_cflags), '--ldflags=%s' %(seastar_ldflags)]
 if args.allocator_page_size:
     seastar_flags += ["--allocator-page-size={}".format(args.allocator_page_size)]
+
+seastar_flags += ["--huge-page-size-mb={}".format(args.huge_page_size_mb)]
 
 status = subprocess.call([python, './configure.py'] + seastar_flags, cwd = 'seastar')
 
