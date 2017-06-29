@@ -303,6 +303,7 @@ arg_parser.add_argument('--enable-gcc6-concepts', dest='gcc6_concepts', action='
                         help='enable experimental support for C++ Concepts as implemented in GCC 6')
 arg_parser.add_argument('--page-bits', dest = 'pagebits', help = 'Memory page bits', type=int)
 arg_parser.add_argument('--cache-line-size', dest = 'cache_line_size', help = 'CPU cache line size', type=int)
+arg_parser.add_argument('--huge-page-size-mb', dest = 'huge_page_size_mb', help = 'Huge page size in MB', type=int, default=2)
 args = arg_parser.parse_args()
 
 defines = []
@@ -795,6 +796,8 @@ if args.pagebits:
     seastar_flags += ["--page-bits={}".format(args.pagebits)]
 if args.cache_line_size:
     seastar_flags += ["--cache-line-size={}".format(args.cache_line_size)]
+
+seastar_flags += ["--huge-page-size-mb={}".format(args.huge_page_size_mb)]
 
 status = subprocess.call([python, './configure.py'] + seastar_flags, cwd = 'seastar')
 
