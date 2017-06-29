@@ -327,7 +327,7 @@ private:
     // Used to allow shutting down repairs in progress, and waiting for them.
     seastar::gate _gate;
     // Set when the repair service is being shutdown
-    std::atomic_bool _shutdown alignas(64);
+    std::atomic_bool _shutdown alignas(seastar::memory::cache_line_size);
 public:
     tracker() : _shutdown(false) {
     }
