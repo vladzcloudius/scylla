@@ -685,14 +685,14 @@ public:
             , "org.apache.cassandra.auth.CassandraAuthorizer" \
     )   \
     val(permissions_validity_in_ms, uint32_t, 10000, Used,     \
-            "How long permissions in cache remain valid. Depending on the authorizer, such as CassandraAuthorizer, fetching permissions can be resource intensive. This setting disabled when set to 0 or when AllowAllAuthorizer is set.\n"  \
+            "How long permissions in cache remain valid. Depending on the authorizer, such as CassandraAuthorizer, fetching permissions can be resource intensive. Permissions caching is disabled when this property is set to 0 or when AllowAllAuthorizer is used.\n"  \
             "Related information: Object permissions"   \
     )   \
     val(permissions_update_interval_in_ms, uint32_t, 2000, Used,     \
-            "Refresh interval for permissions cache (if enabled). After this interval, cache entries become eligible for refresh. On next access, an async reload is scheduled and the old value is returned until it completes. If permissions_validity_in_ms , then this property must benon-zero."   \
+            "Refresh interval for permissions cache (if enabled). After this interval, cache entries become eligible for refresh. An async reload is scheduled every permissions_update_interval_in_ms time period and the old value is returned until it completes. If permissions_validity_in_ms has a none-zero value, then this property must have a none-zero value."   \
     )   \
     val(permissions_cache_max_entries, uint32_t, 1000, Used,    \
-            "Maximum cached permission entries" \
+            "Maximum cached permission entries. Must have a none-zero value if permissions caching is enabled (see a permissions_validity_in_ms description)." \
     )   \
     val(server_encryption_options, string_map, /*none*/, Used,     \
             "Enable or disable inter-node encryption. You must also generate keys and provide the appropriate key and trust store locations and passwords. No custom encryption options are currently enabled. The available options are:\n"    \
