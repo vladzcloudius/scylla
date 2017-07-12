@@ -183,7 +183,7 @@ public:
         }
 
         _timer.set_callback([this] { on_timer(); });
-        _timer.arm(_refresh);
+        _timer.arm(loading_cache_clock_type::now() + _refresh);
     }
 
     ~loading_cache() {
