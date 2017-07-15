@@ -158,7 +158,7 @@ public:
      * This of course because it needs to access disk to get up to speed.
      * Optionally, could have an "init" func and require calling this.
      */
-    static future<commitlog> create_commitlog(config);
+    static future<commitlog> create_commitlog(config, bool register_metrics = true);
 
 
     /**
@@ -349,7 +349,7 @@ public:
     static future<std::unique_ptr<subscription<temporary_buffer<char>, replay_position>>> read_log_file(
             const sstring&, commit_load_reader_func, position_type = 0);
 private:
-    commitlog(config);
+    commitlog(config, bool register_metrics);
 
     struct entry_writer {
         virtual size_t size(segment&) = 0;

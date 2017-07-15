@@ -243,7 +243,7 @@ public:
         _flush_semaphore.signal();
         --totals.pending_flushes;
     }
-    segment_manager(config c);
+    segment_manager(config c, bool register_metrics);
     ~segment_manager() {
         clogger.trace("Commitlog {} disposed", cfg.commit_log_location);
     }
@@ -920,7 +920,7 @@ db::commitlog::segment_manager::allocate_when_possible(const cf_id_type& id, sha
 
 const size_t db::commitlog::segment::default_size;
 
-db::commitlog::segment_manager::segment_manager(config c)
+db::commitlog::segment_manager::segment_manager(config c, bool register_metrics)
     : cfg([&c] {
         config cfg(c);
 
@@ -959,7 +959,9 @@ db::commitlog::segment_manager::segment_manager(config c)
             cfg.commit_log_location, max_disk_size / (1024 * 1024),
             smp::count);
 
-    create_counters();
+    if (register_metrics) {
+        create_counters();
+    }
 }
 
 size_t db::commitlog::segment_manager::max_request_controller_units() const {
@@ -1499,8 +1501,8 @@ future<db::rp_handle> db::commitlog::add_entry(const cf_id_type& id, const commi
     return _segment_manager->allocate_when_possible(id, writer, timeout);
 }
 
-db::commitlog::commitlog(config cfg)
-        : _segment_manager(::make_shared<segment_manager>(std::move(cfg))) {
+db::commitlog::commitlog(config cfg, bool register_metrics)
+        : _segment_manager(::make_shared<segment_manager>(std::move(cfg), register_metrics)) {
 }
 
 db::commitlog::commitlog(commitlog&& v) noexcept
@@ -1513,8 +1515,8 @@ db::commitlog::~commitlog() {
     }
 }
 
-future<db::commitlog> db::commitlog::create_commitlog(config cfg) {
-    commitlog c(std::move(cfg));
+future<db::commitlog> db::commitlog::create_commitlog(config cfg, bool register_metrics) {
+    commitlog c(std::move(cfg), register_metrics);
     auto f = c._segment_manager->init();
     return f.then([c = std::move(c)]() mutable {
         return make_ready_future<commitlog>(std::move(c));
