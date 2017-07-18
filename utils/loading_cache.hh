@@ -29,6 +29,7 @@
 #include <seastar/core/timer.hh>
 
 #include "utils/exceptions.hh"
+#include "utils/loading_shared_values.hh"
 
 namespace bi = boost::intrusive;
 
@@ -38,19 +39,19 @@ namespace utils {
 typedef lowres_clock loading_cache_clock_type;
 typedef bi::list_base_hook<bi::link_mode<bi::auto_unlink>> auto_unlink_list_hook;
 
-template<typename Tp, typename Key, typename Hash, typename EqualPred>
+template<typename Tp, typename Key, typename Hash, typename EqualPred, typename LoadingSharedValueStats>
 class timestamped_val : public auto_unlink_list_hook, public bi::unordered_set_base_hook<bi::store_hash<true>> {
 public:
     typedef bi::list<timestamped_val, bi::constant_time_size<false>> lru_list_type;
-    typedef Key key_type;
+    typedef typename utils::loading_shared_values<Key, Tp, Hash, EqualPred, LoadingSharedValueStats> loading_values_type;
+    typedef typename loading_values_type::entry_ptr ts_value_ptr_type;
     typedef Tp value_type;
 
 private:
-    std::experimental::optional<Tp> _opt_value;
+    ts_value_ptr_type _value_ptr;
     loading_cache_clock_type::time_point _loaded;
     loading_cache_clock_type::time_point _last_read;
     lru_list_type& _lru_list; /// MRU item is at the front, LRU - at the back
-    Key _key;
 
 public:
     struct key_eq {
@@ -63,29 +64,15 @@ public:
        }
     };
 
-    timestamped_val(lru_list_type& lru_list, const Key& key)
-        : _loaded(loading_cache_clock_type::now())
+    timestamped_val(ts_value_ptr_type val_ptr, lru_list_type& lru_list)
+        : _value_ptr(std::move(val_ptr))
+        , _loaded(loading_cache_clock_type::now())
         , _last_read(_loaded)
         , _lru_list(lru_list)
-        , _key(key) {}
+    {}
 
-    timestamped_val(lru_list_type& lru_list, Key&& key)
-        : _loaded(loading_cache_clock_type::now())
-        , _last_read(_loaded)
-        , _lru_list(lru_list)
-        , _key(std::move(key)) {}
-
-    timestamped_val(const timestamped_val&) = default;
-    timestamped_val(timestamped_val&&) = default;
-
-    // Make sure copy/move-assignments don't go through the template below
-    timestamped_val& operator=(const timestamped_val&) = default;
-    timestamped_val& operator=(timestamped_val&) = default;
-    timestamped_val& operator=(timestamped_val&&) = default;
-
-    template <typename U>
-    timestamped_val& operator=(U&& new_val) {
-        _opt_value = std::forward<U>(new_val);
+    timestamped_val& operator=(Tp new_val) {
+        *_value_ptr = std::move(new_val);
         _loaded = loading_cache_clock_type::now();
         return *this;
     }
@@ -93,11 +80,7 @@ public:
     const Tp& value() {
         _last_read = loading_cache_clock_type::now();
         touch();
-        return _opt_value.value();
-    }
-
-    explicit operator bool() const noexcept {
-        return bool(_opt_value);
+        return *_value_ptr;
     }
 
     loading_cache_clock_type::time_point last_read() const noexcept {
@@ -109,7 +92,7 @@ public:
     }
 
     const Key& key() const {
-        return _key;
+        return loading_values_type::to_key(_value_ptr);
     }
 
     friend bool operator==(const timestamped_val& a, const timestamped_val& b){
@@ -129,28 +112,18 @@ private:
     }
 };
 
-class shared_mutex {
-private:
-    lw_shared_ptr<semaphore> _mutex_ptr;
-
-public:
-    shared_mutex() : _mutex_ptr(make_lw_shared<semaphore>(1)) {}
-    semaphore& get() const noexcept {
-        return *_mutex_ptr;
-    }
-};
-
 template<typename Key,
          typename Tp,
          typename Hash = std::hash<Key>,
          typename EqualPred = std::equal_to<Key>,
-         typename Alloc = std::allocator<timestamped_val<Tp, Key, Hash, EqualPred>>,
-         typename SharedMutexMapAlloc = std::allocator<std::pair<const Key, shared_mutex>>>
+         typename LoadingSharedValueStats = utils::do_nothing_loading_shared_values_stats,
+         typename Alloc = std::allocator<timestamped_val<Tp, Key, Hash, EqualPred, LoadingSharedValueStats>>>
 class loading_cache {
 private:
-    typedef timestamped_val<Tp, Key, Hash, EqualPred> ts_value_type;
+    typedef timestamped_val<Tp, Key, Hash, EqualPred, LoadingSharedValueStats> ts_value_type;
     typedef bi::unordered_set<ts_value_type, bi::power_2_buckets<true>, bi::compare_hash<true>> set_type;
-    typedef std::unordered_map<Key, shared_mutex, Hash, EqualPred, SharedMutexMapAlloc> write_mutex_map_type;
+    typedef typename ts_value_type::loading_values_type loading_values_type;
+    typedef typename ts_value_type::ts_value_ptr_type ts_value_ptr_type;
     typedef typename ts_value_type::lru_list_type lru_list_type;
     typedef typename set_type::bucket_traits bi_set_bucket_traits;
 
@@ -197,16 +170,25 @@ public:
             return _load(k);
         }
 
-        // If the key is not in the cache yet, then find_or_create() is going to
-        // create a new uninitialized value in the map. If the value is already
-        // in the cache (the fast path) simply return the value. Otherwise, take
-        // the mutex and try to load the value (the slow path).
-        iterator ts_value_it = find_or_create(k);
-        if (*ts_value_it) {
-            return make_ready_future<Tp>(ts_value_it->value());
-        } else {
-            return slow_load(k);
+        iterator i = _set.find(k, Hash(), typename ts_value_type::key_eq());
+        if (i == _set.end()) {
+            return _loading_values.get_or_load(k, _load).then([this, k] (ts_value_ptr_type v_ptr) {
+                // check again since it could have already been inserted
+                iterator i = _set.find(k, Hash(), typename ts_value_type::key_eq());
+                if (i == _set.end()) {
+                    _logger.trace("{}: storing the value for the first time", k);
+                    ts_value_type* new_ts_val = Alloc().allocate(1);
+                    new(new_ts_val) ts_value_type(std::move(v_ptr), _lru_list);
+                    auto p = _set.insert(*new_ts_val);
+                    assert(p.second);
+                    return make_ready_future<Tp>(p.first->value());
+                }
+
+                return make_ready_future<Tp>(i->value());
+            });
         }
+
+        return make_ready_future<Tp>(i->value());
     }
 
 private:
@@ -214,50 +196,9 @@ private:
         return _expiry != std::chrono::milliseconds(0);
     }
 
-    /// Look for the entry with the given key. It it doesn't exist - create a new one and add it to the _set.
-    ///
-    /// \param k The key to look for
-    ///
-    /// \return An iterator to the value with the given key (always dirrerent from _set.end())
-    template <typename KeyType>
-    iterator find_or_create(KeyType&& k) {
-        iterator i = _set.find(k, Hash(), typename ts_value_type::key_eq());
-        if (i == _set.end()) {
-            ts_value_type* new_ts_val = Alloc().allocate(1);
-            new(new_ts_val) ts_value_type(_lru_list, std::forward<KeyType>(k));
-            auto p = _set.insert(*new_ts_val);
-            i = p.first;
-        }
-
-        return i;
-    }
-
     static void destroy_ts_value(ts_value_type* val) {
         val->~ts_value_type();
         Alloc().deallocate(val, 1);
-    }
-
-    future<Tp> slow_load(const Key& k) {
-        // If the key is not in the cache yet, then _write_mutex_map[k] is going
-        // to create a new value with the initialized mutex. The mutex is going
-        // to serialize the producers and only the first one is going to
-        // actually issue a load operation and initialize the value with the
-        // received result. The rest are going to see (and read) the initialized
-        // value when they enter the critical section.
-        shared_mutex sm = _write_mutex_map[k];
-        return with_semaphore(sm.get(), 1, [this, k] {
-            iterator ts_value_it = find_or_create(k);
-            if (*ts_value_it) {
-                return make_ready_future<Tp>(ts_value_it->value());
-            }
-            _logger.trace("{}: storing the value for the first time", k);
-            return _load(k).then([this, k] (Tp t) {
-                // we have to "re-read" the _set here because the value may have been evicted by now
-                iterator ts_value_it = find_or_create(std::move(k));
-                *ts_value_it = std::move(t);
-                return make_ready_future<Tp>(ts_value_it->value());
-            });
-        }).finally([sm] {});
     }
 
     future<> reload(ts_value_type& ts_val) {
@@ -343,9 +284,6 @@ private:
 
         auto timer_start_tp = loading_cache_clock_type::now();
 
-        // Clear all cached mutexes
-        _write_mutex_map.clear();
-
         // Clean up items that were not touched for the whole _expiry period.
         drop_expired();
 
@@ -358,7 +296,7 @@ private:
         // Reload all those which vlaue needs to be reloaded.
         parallel_for_each(_set.begin(), _set.end(), [this, curr_time = timer_start_tp] (auto& ts_val) {
             _logger.trace("on_timer(): {}: checking the value age", ts_val.key());
-            if (ts_val && ts_val.loaded() + _refresh < curr_time) {
+            if (ts_val.loaded() + _refresh < curr_time) {
                 _logger.trace("on_timer(): {}: reloading the value", ts_val.key());
                 return this->reload(ts_val);
             }
@@ -369,10 +307,10 @@ private:
         });
     }
 
+    loading_values_type _loading_values;
     std::vector<typename set_type::bucket_type> _buckets;
     size_t _current_buckets_count = initial_num_buckets;
     set_type _set;
-    write_mutex_map_type _write_mutex_map;
     lru_list_type _lru_list;
     size_t _max_size;
     std::chrono::milliseconds _expiry;
