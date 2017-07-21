@@ -178,6 +178,7 @@ public:
                     _logger.trace("{}: storing the value for the first time", k);
                     ts_value_type* new_ts_val = Alloc().allocate(1);
                     new(new_ts_val) ts_value_type(std::move(v_ptr), _lru_list);
+                    rehash_before_insert();
                     _set.insert(*new_ts_val);
                     return make_ready_future<Tp>(new_ts_val->value());
                 }
@@ -256,6 +257,14 @@ private:
     void periodic_rehash() noexcept {
         try {
             _loading_values.rehash();
+            sync_buckets_count();
+        } catch (...) {
+            // if rehashing fails - continue with the current buckets array
+        }
+    }
+
+    void rehash_before_insert() noexcept {
+        try {
             sync_buckets_count();
         } catch (...) {
             // if rehashing fails - continue with the current buckets array
