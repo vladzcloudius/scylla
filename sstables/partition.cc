@@ -854,6 +854,10 @@ sstables::sstable::find_disk_ranges(
         schema_ptr schema, const sstables::key& key,
         const query::partition_slice& slice,
         const io_priority_class& pc) {
+
+    printf("\t\tGoing to return an exceptional future\n");
+    return make_exception_future<sstable::disk_read_range>(std::logic_error("Testing throwing from find_disk_ranges()"));
+
     auto& partitioner = dht::global_partitioner();
     auto token = partitioner.get_token(key_view(key));
 
