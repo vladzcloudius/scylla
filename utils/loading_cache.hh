@@ -40,7 +40,7 @@ namespace utils {
 using loading_cache_clock_type = seastar::lowres_clock;
 using auto_unlink_list_hook = bi::list_base_hook<bi::link_mode<bi::auto_unlink>>;
 
-template<typename Tp, typename Key, typename Hash, typename EqualPred, typename LoadingSharedValuesStats>
+template<typename Tp, typename Key, typename EntrySize, typename Hash, typename EqualPred, typename LoadingSharedValuesStats>
 class timestamped_val : public auto_unlink_list_hook, public bi::unordered_set_base_hook<bi::store_hash<true>> {
 public:
     using lru_list_type = bi::list<timestamped_val, bi::constant_time_size<false>>;
@@ -53,6 +53,8 @@ private:
     loading_cache_clock_type::time_point _loaded;
     loading_cache_clock_type::time_point _last_read;
     lru_list_type& _lru_list; /// MRU item is at the front, LRU - at the back
+    size_t& _cache_size;
+    size_t _size = 0;
 
 public:
     struct key_eq {
@@ -65,16 +67,27 @@ public:
        }
     };
 
-    timestamped_val(value_ptr val_ptr, lru_list_type& lru_list)
+    timestamped_val(value_ptr val_ptr, lru_list_type& lru_list, size_t& cache_size)
         : _value_ptr(std::move(val_ptr))
         , _loaded(loading_cache_clock_type::now())
         , _last_read(_loaded)
         , _lru_list(lru_list)
-    {}
+        , _cache_size(cache_size)
+        , _size(EntrySize()(*_value_ptr))
+    {
+        _cache_size += _size;
+    }
+
+    ~timestamped_val() {
+        _cache_size -= _size;
+    }
 
     timestamped_val& operator=(Tp new_val) {
         *_value_ptr = std::move(new_val);
         _loaded = loading_cache_clock_type::now();
+        _cache_size -= _size;
+        _size = EntrySize()(*_value_ptr);
+        _cache_size += _size;
         return *this;
     }
 
@@ -113,15 +126,49 @@ private:
     }
 };
 
+template <typename Tp>
+struct simple_entry_size {
+    size_t operator()(const Tp& val) {
+        return 1;
+    }
+};
+
+/// \brief Loading cache is a cache that loads the value into the cache using the given asynchronous callback.
+///
+/// The cached values are reloaded every given time period ("refresh").
+///
+/// The values are going to be evicted from the cache if they are not accessed during the "expiration" period or haven't
+/// been reloaded even once during the same period.
+///
+/// The cache is also limited in size and if adding the next value is going
+/// to exceed the cache size limit the least recently used value(s) is(are) going to be evicted until the size of the cache
+/// becomes such that adding the new value is not going to break the size limit.
+///
+/// The size of the cache is defined as a sum of sizes of all cached entries.
+/// The size of each entry is defined by the value returned by the \tparam EntrySize predicate applied on it.
+///
+/// The get(key) method ensures that the "loader" callback is called only once for each cached entry regardless of how many
+/// callers are calling for the get(key) for the same "key" at the same time. Only after the value is evicted from the cache
+/// it's going to be "loaded" in the context of get(key). As long as the value is cached get(key) is going to return the
+/// cached value immediately and reload it in the background every "refresh" time period.
+///
+/// \tparam Key type of the cache key
+/// \tparam Tp type of the cached value
+/// \tparam EntrySize predicate to calculate the entry size
+/// \tparam Hash hash function
+/// \tparam EqualPred equality predicate
+/// \tparam LoadingSharedValuesStats statistics incrementing class (see utils::loading_shared_values)
+/// \tparam Alloc elements allocator
 template<typename Key,
          typename Tp,
+         typename EntrySize = simple_entry_size<Tp>,
          typename Hash = std::hash<Key>,
          typename EqualPred = std::equal_to<Key>,
          typename LoadingSharedValuesStats = utils::do_nothing_loading_shared_values_stats,
-         typename Alloc = std::allocator<timestamped_val<Tp, Key, Hash, EqualPred, LoadingSharedValuesStats>>>
+         typename Alloc = std::allocator<timestamped_val<Tp, Key, EntrySize, Hash, EqualPred, LoadingSharedValuesStats>>>
 class loading_cache {
 private:
-    using ts_value_type = timestamped_val<Tp, Key, Hash, EqualPred, LoadingSharedValuesStats>;
+    using ts_value_type = timestamped_val<Tp, Key, EntrySize, Hash, EqualPred, LoadingSharedValuesStats>;
     using set_type = bi::unordered_set<ts_value_type, bi::power_2_buckets<true>, bi::compare_hash<true>>;
     using loading_values_type = typename ts_value_type::loading_values_type;
     using value_ptr = typename ts_value_type::value_ptr;
@@ -178,7 +225,7 @@ public:
                 if (i == _set.end()) {
                     _logger.trace("{}: storing the value for the first time", k);
                     ts_value_type* new_ts_val = Alloc().allocate(1);
-                    new(new_ts_val) ts_value_type(std::move(v_ptr), _lru_list);
+                    new(new_ts_val) ts_value_type(std::move(v_ptr), _lru_list, _current_size);
                     rehash_before_insert();
                     _set.insert(*new_ts_val);
                     return make_ready_future<Tp>(new_ts_val->value());
@@ -247,14 +294,11 @@ private:
 
     // Shrink the cache to the _max_size discarding the least recently used items
     void shrink() {
-        if (_set.size() > _max_size) {
-            auto num_items_to_erase = _set.size() - _max_size;
-            for (size_t i = 0; i < num_items_to_erase; ++i) {
-                using namespace std::chrono;
-                ts_value_type& ts_val = *_lru_list.rbegin();
-                _logger.trace("shrink(): {}: dropping the entry: ms since last_read {}", ts_val.key(), duration_cast<milliseconds>(loading_cache_clock_type::now() - ts_val.last_read()).count());
-                erase(_set.iterator_to(ts_val));
-            }
+        while (_current_size > _max_size) {
+            using namespace std::chrono;
+            ts_value_type& ts_val = *_lru_list.rbegin();
+            _logger.trace("shrink(): {}: dropping the entry: ms since last_read {}", ts_val.key(), duration_cast<milliseconds>(loading_cache_clock_type::now() - ts_val.last_read()).count());
+            erase(_set.iterator_to(ts_val));
         }
     }
 
@@ -327,7 +371,8 @@ private:
     size_t _current_buckets_count = initial_buckets_count;
     set_type _set;
     lru_list_type _lru_list;
-    size_t _max_size;
+    size_t _current_size = 0;
+    size_t _max_size = 0;
     std::chrono::milliseconds _expiry;
     std::chrono::milliseconds _refresh;
     loading_cache_clock_type::duration _timer_period;
