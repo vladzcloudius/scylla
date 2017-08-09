@@ -41,7 +41,7 @@ typedef lowres_clock loading_cache_clock_type;
 typedef bi::list_base_hook<bi::link_mode<bi::auto_unlink>> auto_unlink_list_hook;
 
 template<typename Tp, typename Key, typename EntrySize, typename Hash, typename EqualPred, typename LoadingSharedValuesStats>
-class timestamped_val : public auto_unlink_list_hook, public bi::unordered_set_base_hook<bi::store_hash<true>> {
+class timestamped_val : public auto_unlink_list_hook, public bi::unordered_set_base_hook<bi::store_hash<true>>, public seastar::weakly_referencable<timestamped_val<Tp, Key, EntrySize, Hash, EqualPred, LoadingSharedValuesStats>> {
 public:
     typedef bi::list<timestamped_val, bi::constant_time_size<false>> lru_list_type;
     typedef typename utils::loading_shared_values<Key, Tp, Hash, EqualPred, LoadingSharedValuesStats, 256> loading_values_type;
@@ -125,6 +125,10 @@ public:
         return Hash()(v.key());
     }
 
+    size_t size() const {
+        return _size;
+    }
+
 private:
     /// Set this item as the most recently used item.
     /// The MRU item is going to be at the front of the _lru_list, the LRU item - at the back.
@@ -166,6 +170,7 @@ public:
     typedef Key key_type;
     typedef typename ts_value_type::value_ptr value_ptr;
 
+    class entry_is_too_big : public std::exception {};
     class entry_not_found : public std::exception {
     private:
         sstring _msg;
@@ -288,9 +293,21 @@ public:
                     _logger.trace("{}: storing the value for the first time", k);
                     ts_value_type* new_ts_val = Alloc().allocate(1);
                     new(new_ts_val) ts_value_type(std::move(v_ptr), _lru_list, _current_size);
+
+                    if (new_ts_val->size() > _max_size) {
+                        return make_exception_future<value_ptr>(entry_is_too_big());
+                    }
+
                     rehash_before_insert();
                     _set.insert(*new_ts_val);
-                    return make_ready_future<value_ptr>(new_ts_val->pointer());
+
+                    // this will "touch" the entry and add it to the LRU list - we must do this before the shrink() call
+                    value_ptr vp = new_ts_val->pointer();
+
+                    // Remove the least recently used items if map is too big.
+                    shrink();
+
+                    return make_ready_future<value_ptr>(std::move(vp));
                 }
 
                 return make_ready_future<value_ptr>(i->pointer());
@@ -374,7 +391,13 @@ private:
     }
 
     future<> reload(ts_value_type& ts_val) {
-        return _load(ts_val.key()).then_wrapped([this, &ts_val] (auto&& f) {
+        return _load(ts_val.key()).then_wrapped([this, ts_val_ptr = ts_val.weak_from_this()] (auto&& f) mutable {
+            // if the entry has been evicted by now - simply end here
+            if (!ts_val_ptr) {
+                _logger.trace("reload(): entry was dropped during the reload");
+                return make_ready_future<>();
+            }
+
             // The exceptions are related to the load operation itself.
             // We should ignore them for the background reads - if
             // they persist the value will age and will be reloaded in
@@ -382,12 +405,14 @@ private:
             // will be propagated up to the user and will fail the
             // corresponding query.
             try {
-                ts_val = f.get0();
+                *ts_val_ptr = f.get0();
             } catch (std::exception& e) {
-                _logger.debug("{}: reload failed: {}", ts_val.key(), e.what());
+                _logger.debug("{}: reload failed: {}", ts_val_ptr->key(), e.what());
             } catch (...) {
-                _logger.debug("{}: reload failed: unknown error", ts_val.key());
+                _logger.debug("{}: reload failed: unknown error", ts_val_ptr->key());
             }
+
+            return make_ready_future<>();
         });
     }
 
@@ -467,9 +492,6 @@ private:
 
         // Clean up items that were not touched for the whole _expiry period.
         drop_expired();
-
-        // Remove the least recently used items if map is too big.
-        shrink();
 
         // check if rehashing is needed and do it if it is.
         periodic_rehash();
