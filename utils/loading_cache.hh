@@ -91,7 +91,7 @@ public:
         return *this;
     }
 
-    const Tp& value() {
+    Tp& value() {
         touch();
         return *_value_ptr;
     }
@@ -100,6 +100,10 @@ public:
         touch();
         return _value_ptr;
     }
+
+    /// Like value() but without modifying the last read timestamp
+    Tp& peek() { return *_value_ptr; }
+    const Tp& peek() const { return *_value_ptr; }
 
     loading_cache_clock_type::time_point last_read() const noexcept {
         return _last_read;
@@ -153,14 +157,69 @@ private:
     typedef typename ts_value_type::loading_values_type loading_values_type;
     typedef typename ts_value_type::lru_list_type lru_list_type;
     typedef typename set_type::bucket_traits bi_set_bucket_traits;
+    typedef typename set_type::iterator set_iterator;
 
     static constexpr size_t initial_buckets_count = loading_values_type::initial_buckets_count;
 
 public:
     typedef Tp value_type;
     typedef Key key_type;
-    typedef typename set_type::iterator iterator;
     typedef typename ts_value_type::value_ptr value_ptr;
+
+    class entry_not_found : public std::exception {
+    private:
+        sstring _msg;
+
+    public:
+        entry_not_found(const Key& k) : _msg(seastar::format("{}", k)) {}
+        virtual const char* what() const noexcept override {
+            return _msg.c_str();
+        }
+    };
+
+    class iterator {
+    private:
+        set_iterator _set_it;
+
+    public:
+        iterator() = default;
+        iterator(set_iterator it) : _set_it(std::move(it)) {}
+
+        iterator& operator++() {
+            ++_set_it;
+            return *this;
+        }
+
+        iterator operator++(int) {
+            set_iterator tmp(_set_it);
+            operator++();
+            return tmp;
+        }
+
+        Tp& operator*() {
+            return _set_it->value();
+        }
+
+        Tp* operator->() {
+            return &_set_it->value();
+        }
+
+        bool operator==(const iterator& other) {
+            return _set_it == other._set_it;
+        }
+
+        bool operator!=(const iterator& other) {
+            return !(*this == other);
+        }
+    };
+
+    iterator end() {
+        return _set.end();
+    }
+
+    iterator begin() {
+        _set.begin();
+    }
 
     template<typename Func>
     loading_cache(size_t max_size, std::chrono::milliseconds expiry, std::chrono::milliseconds refresh, logging::logger& logger, Func&& load)
@@ -220,11 +279,11 @@ public:
         // we shouldn't be here if caching is disabled
         assert(caching_enabled());
 
-        iterator i = _set.find(k, Hash(), typename ts_value_type::key_eq());
+        set_iterator i = _set.find(k, Hash(), typename ts_value_type::key_eq());
         if (i == _set.end()) {
             return _loading_values.get_or_load(k, std::forward<LoadFunc>(load)).then([this, k] (value_ptr v_ptr) {
                 // check again since it could have already been inserted
-                iterator i = _set.find(k, Hash(), typename ts_value_type::key_eq());
+                set_iterator i = _set.find(k, Hash(), typename ts_value_type::key_eq());
                 if (i == _set.end()) {
                     _logger.trace("{}: storing the value for the first time", k);
                     ts_value_type* new_ts_val = Alloc().allocate(1);
@@ -265,6 +324,45 @@ public:
         return _timer_reads_gate.close().finally([this] { _timer.cancel(); });
     }
 
+    size_t erase(const Key& k) {
+        return _set.erase_and_dispose(k, Hash(), typename ts_value_type::key_eq(), [] (ts_value_type* ptr) { loading_cache::destroy_ts_value(ptr); });
+    }
+
+    iterator find(const Key& k) {
+        return _set.find(k, Hash(), typename ts_value_type::key_eq());
+    }
+
+    Tp& at(const Key& k) {
+        set_iterator i = _set.find(k, Hash(), typename ts_value_type::key_eq());
+        if (i == _set.end()) {
+            throw entry_not_found(k);
+        }
+
+        return i->value();
+    }
+
+    Tp& operator[](const Key& k) {
+        set_iterator i = _set.find(k, Hash(), typename ts_value_type::key_eq());
+        return i->value();
+    }
+
+    template <typename Pred>
+    void remove_if(Pred&& pred) {
+        _lru_list.remove_and_dispose_if([this, &pred] (const ts_value_type& v) {
+            return pred(v.peek());
+        }, [this] (ts_value_type* p) {
+            erase(_set.iterator_to(*p));
+        });
+    }
+
+    size_t entries_count() const {
+        return _set.size();
+    }
+
+    size_t size() const {
+        return _current_size;
+    }
+
 private:
     bool caching_enabled() const {
         return _expiry != std::chrono::milliseconds(0);
@@ -293,7 +391,7 @@ private:
         });
     }
 
-    void erase(iterator it) {
+    void erase(set_iterator it) {
         _set.erase_and_dispose(it, [] (ts_value_type* ptr) { loading_cache::destroy_ts_value(ptr); });
         // no need to delete the item from _lru_list - it's auto-deleted
     }
@@ -409,7 +507,7 @@ private:
     set_type _set;
     lru_list_type _lru_list;
     size_t _current_size = 0;
-    size_t _max_size;
+    size_t _max_size = 0;
     std::chrono::milliseconds _expiry;
     std::chrono::milliseconds _refresh;
     loading_cache_clock_type::duration _timer_period;
