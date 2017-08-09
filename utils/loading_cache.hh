@@ -92,9 +92,13 @@ public:
     }
 
     const Tp& value() {
-        _last_read = loading_cache_clock_type::now();
         touch();
         return *_value_ptr;
+    }
+
+    value_ptr pointer() {
+        touch();
+        return _value_ptr;
     }
 
     loading_cache_clock_type::time_point last_read() const noexcept {
@@ -121,6 +125,7 @@ private:
     /// Set this item as the most recently used item.
     /// The MRU item is going to be at the front of the _lru_list, the LRU item - at the back.
     void touch() noexcept {
+        _last_read = loading_cache_clock_type::now();
         auto_unlink_list_hook::unlink();
         _lru_list.push_front(*this);
     }
@@ -147,9 +152,9 @@ struct simple_entry_size {
 /// The size of the cache is defined as a sum of sizes of all cached entries.
 /// The size of each entry is defined by the value returned by the \tparam EntrySize predicate applied on it.
 ///
-/// The get(key) method ensures that the "loader" callback is called only once for each cached entry regardless of how many
-/// callers are calling for the get(key) for the same "key" at the same time. Only after the value is evicted from the cache
-/// it's going to be "loaded" in the context of get(key). As long as the value is cached get(key) is going to return the
+/// The get(key) or get_ptr(key) methods ensures that the "loader" callback is called only once for each cached entry regardless of how many
+/// callers are calling for the get_XXX(key) for the same "key" at the same time. Only after the value is evicted from the cache
+/// it's going to be "loaded" in the context of get_XXX(key). As long as the value is cached get_XXX(key) is going to return the
 /// cached value immediately and reload it in the background every "refresh" time period.
 ///
 /// \tparam Key type of the cache key
@@ -171,7 +176,6 @@ private:
     using ts_value_type = timestamped_val<Tp, Key, EntrySize, Hash, EqualPred, LoadingSharedValuesStats>;
     using set_type = bi::unordered_set<ts_value_type, bi::power_2_buckets<true>, bi::compare_hash<true>>;
     using loading_values_type = typename ts_value_type::loading_values_type;
-    using value_ptr = typename ts_value_type::value_ptr;
     using lru_list_type = typename ts_value_type::lru_list_type;
     using bi_set_bucket_traits = typename set_type::bucket_traits;
 
@@ -181,6 +185,7 @@ public:
     using value_type = Tp;
     using key_type = Key;
     using iterator = typename set_type::iterator;
+    using value_ptr = typename ts_value_type::value_ptr;
 
     template<typename Func>
     loading_cache(size_t max_size, std::chrono::milliseconds expiry, std::chrono::milliseconds refresh, logging::logger& logger, Func&& load)
@@ -211,11 +216,9 @@ public:
         _set.clear_and_dispose([] (ts_value_type* ptr) { loading_cache::destroy_ts_value(ptr); });
     }
 
-    future<Tp> get(const Key& k) {
-        // If caching is disabled - always load in the foreground
-        if (!caching_enabled()) {
-            return _load(k);
-        }
+    future<value_ptr> get_ptr(const Key& k) {
+        // we shouldn't be here if caching is disabled
+        assert(caching_enabled());
 
         iterator i = _set.find(k, Hash(), typename ts_value_type::key_eq());
         if (i == _set.end()) {
@@ -228,14 +231,27 @@ public:
                     new(new_ts_val) ts_value_type(std::move(v_ptr), _lru_list, _current_size);
                     rehash_before_insert();
                     _set.insert(*new_ts_val);
-                    return make_ready_future<Tp>(new_ts_val->value());
+                    return make_ready_future<value_ptr>(new_ts_val->pointer());
                 }
 
-                return make_ready_future<Tp>(i->value());
+                return make_ready_future<value_ptr>(i->pointer());
             });
         }
 
-        return make_ready_future<Tp>(i->value());
+        return make_ready_future<value_ptr>(i->pointer());
+    }
+
+    future<Tp> get(const Key& k) {
+        // If caching is disabled - always load in the foreground
+        if (!caching_enabled()) {
+            return _load(k).then([] (Tp val) {
+                return make_ready_future<Tp>(std::move(val));
+            });
+        }
+
+        return get_ptr(k).then([] (value_ptr v_ptr) {
+            return make_ready_future<Tp>(*v_ptr);
+        });
     }
 
     future<> stop() {
