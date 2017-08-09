@@ -35,6 +35,8 @@ struct cql_stats {
     uint64_t batches_pure_logged = 0;
     uint64_t batches_pure_unlogged = 0;
     uint64_t batches_unlogged_from_logged = 0;
+    uint64_t cql_prepared_cache_evictions = 0;
+    uint64_t thrift_prepared_cache_evictions = 0;
 };
 
 }

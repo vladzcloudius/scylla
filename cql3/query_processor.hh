@@ -57,6 +57,7 @@
 #include "statements/prepared_statement.hh"
 #include "transport/messages/result_message.hh"
 #include "untyped_result_set.hh"
+#include "prepared_statements_cache.hh"
 
 namespace cql3 {
 
@@ -71,9 +72,38 @@ class batch_statement;
  */
 struct internal_query_state;
 
+query_processor& get_local_query_processor();
+
 class query_processor {
 public:
     class migration_subscriber;
+
+    class prepared_query_is_too_big : public std::exception {
+    public:
+        static constexpr int max_query_prefix = 100;
+
+    private:
+        sstring _msg;
+
+    public:
+        prepared_query_is_too_big(const sstring& query_string)
+            : _msg("Prepared query is too big: ")
+        {
+            if (query_string.size() > max_query_prefix) {
+                _msg += seastar::format("{}...", query_string.substr(0, max_query_prefix));
+            } else {
+                _msg += query_string;
+            }
+        }
+
+        virtual const char* what() const noexcept override {
+            return _msg.c_str();
+        }
+    };
+
+    typedef bytes cql_prepared_id_type;
+    typedef int32_t thrift_prepared_id_type;
+
 private:
     std::unique_ptr<migration_subscriber> _migration_subscriber;
     distributed<service::storage_proxy>& _proxy;
@@ -134,9 +164,22 @@ private:
         }
     };
 #endif
+    struct cql_prepared_cache_stats_updater {
+        static void inc_hits() {}
+        static void inc_misses() {}
+        static void inc_blocks() {}
+        static void inc_evictions() {  ++get_local_query_processor()._cql_stats.cql_prepared_cache_evictions; }
+    };
 
-    std::unordered_map<bytes, std::unique_ptr<statements::prepared_statement>> _prepared_statements;
-    std::unordered_map<int32_t, std::unique_ptr<statements::prepared_statement>> _thrift_prepared_statements;
+    struct thrift_prepared_cache_stats_updater {
+        static void inc_hits() {}
+        static void inc_misses() {}
+        static void inc_blocks() {}
+        static void inc_evictions() {  ++get_local_query_processor()._cql_stats.thrift_prepared_cache_evictions; }
+    };
+
+    prepared_statements_cache<cql_prepared_id_type, cql_prepared_cache_stats_updater> _cql_prepared_cache;
+    prepared_statements_cache<thrift_prepared_id_type, cql_prepared_cache_stats_updater> _thrift_prepared_cache;
     std::unordered_map<sstring, std::unique_ptr<statements::prepared_statement>> _internal_statements;
 #if 0
 
@@ -229,19 +272,19 @@ private:
 #endif
 public:
     statements::prepared_statement::checked_weak_ptr get_prepared(const bytes& id) {
-        auto it = _prepared_statements.find(id);
-        if (it == _prepared_statements.end()) {
+        auto it = _cql_prepared_cache.find(id);
+        if (it == _cql_prepared_cache.end()) {
             return statements::prepared_statement::checked_weak_ptr();
         }
-        return it->second->checked_weak_from_this();
+        return *it;
     }
 
     statements::prepared_statement::checked_weak_ptr get_prepared_for_thrift(int32_t id) {
-        auto it = _thrift_prepared_statements.find(id);
-        if (it == _thrift_prepared_statements.end()) {
+        auto it = _thrift_prepared_cache.find(id);
+        if (it == _thrift_prepared_cache.end()) {
             return statements::prepared_statement::checked_weak_ptr();
         }
-        return it->second->checked_weak_from_this();
+        return *it;
     }
 #if 0
     public static void validateKey(ByteBuffer key) throws InvalidRequestException
@@ -503,31 +546,50 @@ public:
     static int32_t compute_thrift_id(const std::experimental::string_view& query_string, const sstring& keyspace);
 
 private:
+    template <typename IdType, typename ResultMsgType, typename PreparedCacheType, typename PreparedIdGenerator>
+    future<::shared_ptr<cql_transport::messages::result_message::prepared>>
+    prepare_one(const std::experimental::string_view& query_string, const service::client_state& client_state, PreparedCacheType& cache, PreparedIdGenerator&& id_gen) {
+        return do_with(id_gen(query_string, client_state.get_raw_keyspace()), [this, &query_string, &client_state, &cache] (const IdType& key) {
+            return cache.get(key, [this, &query_string, &client_state] (const IdType& key) {
+                auto prepared = get_statement(query_string, client_state);
+                auto bound_terms = prepared->statement->get_bound_terms();
+                if (bound_terms > std::numeric_limits<uint16_t>::max()) {
+                    throw exceptions::invalid_request_exception(sprint("Too many markers(?). %d markers exceed the allowed maximum of %d", bound_terms, std::numeric_limits<uint16_t>::max()));
+                }
+                assert(bound_terms == prepared->bound_names.size());
+                prepared->raw_cql_statement = query_string.data();
+                return make_ready_future<std::unique_ptr<statements::prepared_statement>>(std::move(prepared));
+            }).then([&key] (auto prep_ptr) {
+                return make_ready_future<::shared_ptr<cql_transport::messages::result_message::prepared>>(::make_shared<ResultMsgType>(key, std::move(prep_ptr)));
+            }).handle_exception_type([query_prefix = sstring(query_string.substr(0, prepared_query_is_too_big::max_query_prefix + 1).to_string())] (typename PreparedCacheType::query_is_too_big&) {
+                return make_exception_future<::shared_ptr<cql_transport::messages::result_message::prepared>>(prepared_query_is_too_big(query_prefix));
+            });
+        });
+    };
+
+    template <typename IdType, typename ResultMsgType, typename PreparedCacheType, typename PreparedIdGenerator>
+    ::shared_ptr<cql_transport::messages::result_message::prepared>
+    get_stored_prepared_statement_one(const std::experimental::string_view& query_string, const sstring& keyspace, PreparedCacheType& cache, PreparedIdGenerator&& id_gen)
+    {
+        auto statement_id = id_gen(query_string, keyspace);
+        auto it = cache.find(statement_id);
+        if (it == cache.end()) {
+            return ::shared_ptr<cql_transport::messages::result_message::prepared>();
+        }
+
+        return ::make_shared<ResultMsgType>(statement_id, *it);
+    }
+
     ::shared_ptr<cql_transport::messages::result_message::prepared>
     get_stored_prepared_statement(const std::experimental::string_view& query_string, const sstring& keyspace, bool for_thrift);
-
-    future<::shared_ptr<cql_transport::messages::result_message::prepared>>
-    store_prepared_statement(const std::experimental::string_view& query_string, const sstring& keyspace, std::unique_ptr<statements::prepared_statement> prepared, bool for_thrift);
 
     // Erases the statements for which filter returns true.
     template <typename Pred>
     void invalidate_prepared_statements(Pred filter) {
         static_assert(std::is_same<bool, std::result_of_t<Pred(::shared_ptr<cql_statement>)>>::value,
                       "bad Pred signature");
-        for (auto it = _prepared_statements.begin(); it != _prepared_statements.end(); ) {
-            if (filter(it->second->statement)) {
-                it = _prepared_statements.erase(it);
-            } else {
-                ++it;
-            }
-        }
-        for (auto it = _thrift_prepared_statements.begin(); it != _thrift_prepared_statements.end(); ) {
-            if (filter(it->second->statement)) {
-                it = _thrift_prepared_statements.erase(it);
-            } else {
-                ++it;
-            }
-        }
+        _cql_prepared_cache.remove_if(filter);
+        _thrift_prepared_cache.remove_if(filter);
     }
 
 #if 0
