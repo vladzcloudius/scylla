@@ -138,9 +138,12 @@ struct simple_entry_size {
     }
 };
 
+enum class loading_cache_reload_enabled { no, yes };
+
 /// \brief Loading cache is a cache that loads the value into the cache using the given asynchronous callback.
 ///
-/// The cached values are reloaded every given time period ("refresh").
+/// The cached values are reloaded every given time period ("refresh") if reloading is enabled
+/// (\tparam ReloadEnabled == loading_cache_reload_enabled::yes).
 ///
 /// The values are going to be evicted from the cache if they are not accessed during the "expiration" period or haven't
 /// been reloaded even once during the same period.
@@ -159,6 +162,7 @@ struct simple_entry_size {
 ///
 /// \tparam Key type of the cache key
 /// \tparam Tp type of the cached value
+/// \tparam ReloadEnabled if loading_cache_reload_enabled::yes allow reloading the values otherwise don't reload
 /// \tparam EntrySize predicate to calculate the entry size
 /// \tparam Hash hash function
 /// \tparam EqualPred equality predicate
@@ -166,6 +170,7 @@ struct simple_entry_size {
 /// \tparam Alloc elements allocator
 template<typename Key,
          typename Tp,
+         loading_cache_reload_enabled ReloadEnabled = loading_cache_reload_enabled::no,
          typename EntrySize = simple_entry_size<Tp>,
          typename Hash = std::hash<Key>,
          typename EqualPred = std::equal_to<Key>,
@@ -196,6 +201,7 @@ public:
                 , _refresh(refresh)
                 , _logger(logger)
                 , _load(std::forward<Func>(load)) {
+        static_assert(ReloadEnabled == loading_cache_reload_enabled::yes, "This constructor should only be invoked when ReloadEnabled == loading_cache_reload_enabled::yes");
 
         // If expiration period is zero - caching is disabled
         if (!caching_enabled()) {
@@ -212,17 +218,41 @@ public:
         _timer.arm(_timer_period);
     }
 
+    loading_cache(size_t max_size, std::chrono::milliseconds expiry, logging::logger& logger)
+                : _buckets(initial_buckets_count)
+                , _set(bi_set_bucket_traits(_buckets.data(), _buckets.size()))
+                , _max_size(max_size)
+                , _expiry(expiry)
+                , _logger(logger) {
+        static_assert(ReloadEnabled == loading_cache_reload_enabled::no, "This constructor should only be invoked when ReloadEnabled == loading_cache_reload_enabled::no");
+
+        // If expiration period is zero - caching is disabled
+        if (!caching_enabled()) {
+            return;
+        }
+
+        // Sanity check: if expiration period is given then maximal size is required
+        if (_max_size == 0) {
+            throw exceptions::configuration_exception("loading_cache: caching is enabled but refresh period and/or max_size are zero");
+        }
+
+        _timer_period = _expiry;
+        _timer.set_callback([this] { on_timer(); });
+        _timer.arm(_timer_period);
+    }
+
     ~loading_cache() {
         _set.clear_and_dispose([] (ts_value_type* ptr) { loading_cache::destroy_ts_value(ptr); });
     }
 
-    future<value_ptr> get_ptr(const Key& k) {
+    template <typename LoadFunc>
+    future<value_ptr> get_ptr(const Key& k, LoadFunc&& load) {
         // we shouldn't be here if caching is disabled
         assert(caching_enabled());
 
         iterator i = _set.find(k, Hash(), typename ts_value_type::key_eq());
         if (i == _set.end()) {
-            return _loading_values.get_or_load(k, _load).then([this, k] (value_ptr v_ptr) {
+            return _loading_values.get_or_load(k, std::forward<LoadFunc>(load)).then([this, k] (value_ptr v_ptr) {
                 // check again since it could have already been inserted
                 iterator i = _set.find(k, Hash(), typename ts_value_type::key_eq());
                 if (i == _set.end()) {
@@ -241,7 +271,14 @@ public:
         return make_ready_future<value_ptr>(i->pointer());
     }
 
+    future<value_ptr> get_ptr(const Key& k) {
+        static_assert(ReloadEnabled == loading_cache_reload_enabled::yes);
+        return get_ptr(k, _load);
+    }
+
     future<Tp> get(const Key& k) {
+        static_assert(ReloadEnabled == loading_cache_reload_enabled::yes);
+
         // If caching is disabled - always load in the foreground
         if (!caching_enabled()) {
             return _load(k).then([] (Tp val) {
@@ -298,7 +335,7 @@ private:
             // An entry should be discarded if it hasn't been reloaded for too long or nobody cares about it anymore
             auto since_last_read = now - v.last_read();
             auto since_loaded = now - v.loaded();
-            if (_expiry < since_last_read || _expiry < since_loaded) {
+            if (_expiry < since_last_read || (ReloadEnabled == loading_cache_reload_enabled::yes && _expiry < since_loaded)) {
                 _logger.trace("drop_expired(): {}: dropping the entry: _expiry {},  ms passed since: loaded {} last_read {}", v.key(), _expiry.count(), duration_cast<milliseconds>(since_loaded).count(), duration_cast<milliseconds>(since_last_read).count());
                 return true;
             }
@@ -355,7 +392,7 @@ private:
     void on_timer() {
         _logger.trace("on_timer(): start");
 
-        auto timer_start_tp = loading_cache_clock_type::now();
+        loading_cache_clock_type::time_point timer_start_tp = loading_cache_clock_type::now();
 
         // Clean up items that were not touched for the whole _expiry period.
         drop_expired();
@@ -365,6 +402,11 @@ private:
 
         // check if rehashing is needed and do it if it is.
         periodic_rehash();
+
+        if (ReloadEnabled == loading_cache_reload_enabled::no) {
+            _timer.arm(timer_start_tp + _timer_period);
+            return;
+        }
 
         // Reload all those which vlaue needs to be reloaded.
         with_gate(_timer_reads_gate, [this, timer_start_tp] {
