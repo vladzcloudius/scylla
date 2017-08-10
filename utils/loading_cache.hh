@@ -37,16 +37,16 @@ namespace bi = boost::intrusive;
 namespace utils {
 // Simple variant of the "LoadingCache" used for permissions in origin.
 
-typedef lowres_clock loading_cache_clock_type;
-typedef bi::list_base_hook<bi::link_mode<bi::auto_unlink>> auto_unlink_list_hook;
+using loading_cache_clock_type = seastar::lowres_clock;
+using auto_unlink_list_hook = bi::list_base_hook<bi::link_mode<bi::auto_unlink>>;
 
 template<typename Tp, typename Key, typename Hash, typename EqualPred, typename LoadingSharedValuesStats>
 class timestamped_val : public auto_unlink_list_hook, public bi::unordered_set_base_hook<bi::store_hash<true>> {
 public:
-    typedef bi::list<timestamped_val, bi::constant_time_size<false>> lru_list_type;
-    typedef typename utils::loading_shared_values<Key, Tp, Hash, EqualPred, LoadingSharedValuesStats, 256> loading_values_type;
-    typedef typename loading_values_type::entry_ptr value_ptr;
-    typedef Tp value_type;
+    using lru_list_type = bi::list<timestamped_val, bi::constant_time_size<false>>;
+    using loading_values_type = typename utils::loading_shared_values<Key, Tp, Hash, EqualPred, LoadingSharedValuesStats, 256>;
+    using value_ptr = typename loading_values_type::entry_ptr;
+    using value_type = Tp;
 
 private:
     value_ptr _value_ptr;
@@ -121,19 +121,19 @@ template<typename Key,
          typename Alloc = std::allocator<timestamped_val<Tp, Key, Hash, EqualPred, LoadingSharedValuesStats>>>
 class loading_cache {
 private:
-    typedef timestamped_val<Tp, Key, Hash, EqualPred, LoadingSharedValuesStats> ts_value_type;
-    typedef bi::unordered_set<ts_value_type, bi::power_2_buckets<true>, bi::compare_hash<true>> set_type;
-    typedef typename ts_value_type::loading_values_type loading_values_type;
-    typedef typename ts_value_type::value_ptr value_ptr;
-    typedef typename ts_value_type::lru_list_type lru_list_type;
-    typedef typename set_type::bucket_traits bi_set_bucket_traits;
+    using ts_value_type = timestamped_val<Tp, Key, Hash, EqualPred, LoadingSharedValuesStats>;
+    using set_type = bi::unordered_set<ts_value_type, bi::power_2_buckets<true>, bi::compare_hash<true>>;
+    using loading_values_type = typename ts_value_type::loading_values_type;
+    using value_ptr = typename ts_value_type::value_ptr;
+    using lru_list_type = typename ts_value_type::lru_list_type;
+    using bi_set_bucket_traits = typename set_type::bucket_traits;
 
     static constexpr size_t initial_buckets_count = loading_values_type::initial_buckets_count;
 
 public:
-    typedef Tp value_type;
-    typedef Key key_type;
-    typedef typename set_type::iterator iterator;
+    using value_type = Tp;
+    using key_type = Key;
+    using iterator = typename set_type::iterator;
 
     template<typename Func>
     loading_cache(size_t max_size, std::chrono::milliseconds expiry, std::chrono::milliseconds refresh, logging::logger& logger, Func&& load)
