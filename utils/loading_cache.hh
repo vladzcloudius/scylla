@@ -261,6 +261,7 @@ public:
                 , _logger(logger)
                 , _load(std::forward<Func>(load)) {
         static_assert(ReloadEnabled == loading_cache_reload_enabled::yes, "This constructor should only be invoked when ReloadEnabled == loading_cache_reload_enabled::yes");
+        static_assert(std::is_same<future<value_type>, std::result_of_t<Func(const key_type&)>>::value, "Bad Func signature");
 
         // If expiration period is zero - caching is disabled
         if (!caching_enabled()) {
@@ -306,6 +307,7 @@ public:
 
     template <typename LoadFunc>
     future<value_ptr> get_ptr(const Key& k, LoadFunc&& load) {
+        static_assert(std::is_same<future<value_type>, std::result_of_t<LoadFunc(const key_type&)>>::value, "Bad LoadFunc signature");
         // we shouldn't be here if caching is disabled
         assert(caching_enabled());
 
@@ -378,6 +380,8 @@ public:
 
     template <typename Pred>
     void remove_if(Pred&& pred) {
+        static_assert(std::is_same<bool, std::result_of_t<Pred(const value_type&)>>::value, "Bad Pred signature");
+
         _lru_list.remove_and_dispose_if([this, &pred] (const ts_value_type& v) {
             return pred(v.peek());
         }, [this] (ts_value_type* p) {
