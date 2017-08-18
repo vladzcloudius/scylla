@@ -139,6 +139,10 @@ public:
         using element_type = value_type;
         entry_ptr() = default;
         explicit entry_ptr(lw_shared_ptr<entry> e) : _e(std::move(e)) {}
+        entry_ptr& operator=(std::nullptr_t) noexcept {
+            _e = nullptr;
+            return *this;
+        }
         explicit operator bool() const { return bool(_e); }
         element_type& operator*() const { return _e->value(); }
         element_type* operator->() const { return &_e->value(); }
