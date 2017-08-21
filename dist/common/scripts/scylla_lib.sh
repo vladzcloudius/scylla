@@ -90,7 +90,7 @@ create_perftune_conf() {
     fi
 
     local mode=`get_tune_mode "$nic"`
-    /usr/lib/scylla/perftune.py --tune net --nic "$nic" "$mode" --dump-options-file > /etc/scylla.d/perftune.yaml
+    /usr/lib/scylla/perftune.py --tune net --nic "$nic" $mode --dump-options-file > /etc/scylla.d/perftune.yaml
 }
 
 . /etc/os-release
