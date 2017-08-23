@@ -104,6 +104,7 @@ future<> manager::start_one() {
         return get_ep_manager(ep).populate_segments_to_replay();
     }).then([this] {
         // we are ready to store new hints...
+        _proxy_anchor->enable_hints();
         _timer.arm(timer_clock_type::now());
         _space_watchdog.start();
     });
@@ -111,6 +112,9 @@ future<> manager::start_one() {
 
 future<> manager::stop() {
     manager_logger.info("Asked to stop");
+    if (_proxy_anchor) {
+        _proxy_anchor->disable_hints();
+    }
     return _hints_timer_gate.close().finally([this] {
         _timer.cancel();
         return _hints_write_gate.close().finally([this] {

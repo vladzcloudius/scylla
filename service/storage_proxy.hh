@@ -54,6 +54,12 @@
 #include <seastar/core/metrics.hh>
 #include "frozen_mutation.hh"
 
+namespace db {
+namespace hints {
+class manager;
+}
+}
+
 namespace compat {
 
 class one_or_two_partition_ranges;
@@ -214,9 +220,7 @@ private:
     // not remove request from the buffer), but this is fine since request ids are unique, so we
     // just skip an entry if request no longer exists.
     circular_buffer<response_id_type> _throttled_writes;
-    constexpr static size_t _max_hints_in_progress = 128; // origin multiplies by FBUtilities.getAvailableProcessors() but we already sharded
-    size_t _total_hints_in_progress = 0;
-    std::unordered_map<gms::inet_address, size_t> _hints_in_progress;
+    db::hints::manager* _local_hints_manager_ptr = nullptr;
     stats _stats;
     static constexpr float CONCURRENT_SUBREQUESTS_MARGIN = 0.10;
     // for read repair chance calculation
@@ -237,12 +241,10 @@ private:
     response_id_type create_write_response_handler(const std::unordered_map<gms::inet_address, std::experimental::optional<mutation>>&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state);
     void send_to_live_endpoints(response_id_type response_id, clock_type::time_point timeout);
     template<typename Range>
-    size_t hint_to_dead_endpoints(std::unique_ptr<mutation_holder>& mh, const Range& targets) noexcept;
+    size_t hint_to_dead_endpoints(std::unique_ptr<mutation_holder>& mh, const Range& targets, tracing::trace_state_ptr tr_state) noexcept;
     void hint_to_dead_endpoints(response_id_type, db::consistency_level);
     bool cannot_hint(gms::inet_address target);
-    size_t get_hints_in_progress_for(gms::inet_address target);
-    bool should_hint(gms::inet_address ep) noexcept;
-    bool submit_hint(std::unique_ptr<mutation_holder>& mh, gms::inet_address target);
+    bool hints_enabled() noexcept;
     std::vector<gms::inet_address> get_live_endpoints(keyspace& ks, const dht::token& token);
     std::vector<gms::inet_address> get_live_sorted_endpoints(keyspace& ks, const dht::token& token);
     db::read_repair_decision new_read_repair_decision(const schema& s);
@@ -399,6 +401,9 @@ public:
     const stats& get_stats() const {
         return _stats;
     }
+
+    void enable_hints() noexcept;
+    void disable_hints() noexcept;
 
     friend class abstract_read_executor;
     friend class abstract_write_response_handler;
