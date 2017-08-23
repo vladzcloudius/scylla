@@ -104,6 +104,7 @@ future<> manager::start_one() {
         return get_ep_manager(ep).populate_segments_to_replay();
     }).then([this] {
         // we are ready to store new hints...
+        _proxy_anchor->set_hh_manager(this);
         _timer.arm(timer_clock_type::now());
         _space_watchdog.start();
     });
@@ -112,7 +113,7 @@ future<> manager::start_one() {
 future<> manager::stop() {
     manager_logger.info("Asked to stop");
     if (_proxy_anchor) {
-        _proxy_anchor->disable_hints();
+        _proxy_anchor->set_hh_manager(nullptr);
     }
 
     // this is going to break all sending in progress
