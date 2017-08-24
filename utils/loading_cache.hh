@@ -506,15 +506,13 @@ private:
     /// number of elements, have the same InitialBucketsCount and the _loading_values is promised to have a less
     /// than 0.75 load factor.
     void sync_buckets_count() {
-        if (_current_buckets_count != _loading_values.buckets_count()) {
+        if (buckets_count() != _loading_values.buckets_count()) {
             size_t new_buckets_count = _loading_values.buckets_count();
             std::vector<typename set_type::bucket_type> new_buckets(new_buckets_count);
 
             _set.rehash(bi_set_bucket_traits(new_buckets.data(), new_buckets.size()));
-            _logger.trace("rehash(): buckets count changed: {} -> {}", _current_buckets_count, new_buckets_count);
-
+            _logger.trace("rehash(): buckets count changed: {} -> {}", buckets_count(), new_buckets_count);
             _buckets.swap(new_buckets);
-            _current_buckets_count = new_buckets_count;
         }
     }
 
@@ -550,9 +548,12 @@ private:
         });
     }
 
+    size_t buckets_count() const noexcept {
+        return _buckets.size();
+    }
+
     loading_values_type _loading_values;
     std::vector<typename set_type::bucket_type> _buckets;
-    size_t _current_buckets_count = initial_buckets_count;
     set_type _set;
     lru_list_type _lru_list;
     size_t _current_size = 0;
