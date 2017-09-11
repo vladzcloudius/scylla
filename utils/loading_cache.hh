@@ -251,6 +251,50 @@ public:
 
     class entry_is_too_big : public std::exception {};
 
+    class iterator {
+    private:
+        set_iterator _set_it;
+
+    public:
+        iterator() = default;
+        iterator(set_iterator it) : _set_it(std::move(it)) {}
+
+        iterator& operator++() {
+            ++_set_it;
+            return *this;
+        }
+
+        iterator operator++(int) {
+            set_iterator tmp(_set_it);
+            operator++();
+            return tmp;
+        }
+
+        value_type& operator*() {
+            return _set_it->value();
+        }
+
+        value_type* operator->() {
+            return &_set_it->value();
+        }
+
+        bool operator==(const iterator& other) {
+            return _set_it == other._set_it;
+        }
+
+        bool operator!=(const iterator& other) {
+            return !(*this == other);
+        }
+    };
+
+    iterator end() {
+        return set_end();
+    }
+
+    iterator begin() {
+        return set_begin();
+    }
+
 private:
     loading_cache(size_t max_size, std::chrono::milliseconds expiry, std::chrono::milliseconds refresh, logging::logger& logger)
         : _max_size(max_size)
@@ -356,6 +400,30 @@ public:
 
     future<> stop() {
         return _timer_reads_gate.close().finally([this] { _timer.cancel(); });
+    }
+
+    iterator find(const Key& k) noexcept {
+        return set_find(k);
+    }
+
+    template <typename Pred>
+    void remove_if(Pred&& pred) {
+        static_assert(std::is_same<bool, std::result_of_t<Pred(const value_type&)>>::value, "Bad Pred signature");
+
+        _lru_list.remove_and_dispose_if([this, &pred] (const ts_value_lru_entry& v) {
+            return pred(v.timestamped_value().value());
+        }, [this] (ts_value_lru_entry* p) {
+            loading_cache::destroy_ts_value(p);
+        });
+    }
+
+    size_t size() const {
+        return _loading_values.size();
+    }
+
+    /// \brief returns the memory size the currently cached entries occupy according to the EntrySize predicate.
+    size_t memory_footprint() const {
+        return _current_size;
     }
 
 private:
