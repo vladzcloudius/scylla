@@ -55,7 +55,6 @@
 #include <seastar/net/dns.hh>
 #include <seastar/core/memory.hh>
 #include <seastar/util/log-cli.hh>
-#include <seastar/core/systemwide_memory_barrier.hh>
 #include "service/cache_hitrate_calculator.hh"
 #include "sstables/compaction_manager.hh"
 #include "sstables/sstables.hh"
@@ -274,8 +273,6 @@ int main(int ac, char** av) {
     httpd::http_server_control prometheus_server;
     prometheus::config pctx;
     directories dirs;
-
-    seastar::init_membarrier();
 
     return app.run_deprecated(ac, av, [&] {
         if (help_version) {
