@@ -22,6 +22,7 @@
 #pragma once
 
 #include <cstdint>
+#include <type_traits>
 
 #if defined(__x86_64__) || defined(__i386__)
 #include <smmintrin.h>
