@@ -22,6 +22,7 @@
 #pragma once
 
 #include <cstdint>
+#include <type_traits>
 
 #if defined(__x86_64__) || defined(__i386__)
 #include <smmintrin.h>
@@ -98,6 +99,17 @@ public:
         if (size >= 1) {
             process(*in);
         }
+    }
+#elif defined(__PPC64__)
+    uint32_t crc32_vpmsum(uint32_t crc, const uint8_t* p, size_t len);
+
+    template <class T>
+    void process(T in) {
+        static_assert(std::is_integral<T>::value, "T must be integral type.");
+        _r = crc32_vpmsum(_r, reinterpret_cast<const uint8_t*>(&in), sizeof(T));
+    }
+    void process(const uint8_t* in, size_t size) {
+        _r = crc32_vpmsum(_r, in, size);
     }
 #else
     // On non-x86 platforms use the zlib implementation of crc32.
