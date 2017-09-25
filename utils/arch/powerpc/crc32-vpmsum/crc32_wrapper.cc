@@ -21,7 +21,7 @@
 
 #if defined(__PPC64__)
 #define CRC_TABLE
-#include "crc32_constants.h"
+#include "crc32_constants.hh"
 
 #define VMX_ALIGN       16
 #define VMX_ALIGN_MASK  (VMX_ALIGN-1)
