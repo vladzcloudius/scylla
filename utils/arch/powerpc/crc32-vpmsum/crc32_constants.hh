@@ -18,10 +18,6 @@
  * You should have received a copy of the GNU General Public License
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
-
-// FIXME: remove me!!!
-#define __PPC64__
-
 #if defined(__PPC64__)
 #pragma once
 
