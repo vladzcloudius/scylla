@@ -26,6 +26,10 @@
  *     any later version, or
  *  b) the Apache License, Version 2.0
  */
+
+/*
+ * Copyright (C) 2015 ScyllaDB
+ */
 #if defined(__PPC64__)
 
 #include <ppc-asm.h>

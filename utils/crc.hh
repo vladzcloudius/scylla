@@ -100,7 +100,7 @@ public:
         }
     }
 #elif defined(__PPC64__)
-    unsigned int crc32_vpmsum(unsigned int crc, unsigned char *p, unsigned long len);
+    uint32_t crc32_vpmsum(uint32_t crc, const uint8_t* p, size_t len);
 
     template <class T>
     void process(T in) {
