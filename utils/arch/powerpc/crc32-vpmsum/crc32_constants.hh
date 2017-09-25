@@ -21,7 +21,9 @@
 #if defined(__PPC64__)
 #pragma once
 
+#ifndef __ASSEMBLY__
 static constexpr uint32_t crc32c_polynomial = 0x1edc6f41;
+#endif
 #define CRC_XOR
 #define REFLECT
 
