@@ -19,12 +19,25 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+// FIXME: remove me!!!
+#define __PPC64__
+
 #if defined(__PPC64__)
-#define CRC_TABLE
+
+#include <stdint.h>
+#include <stddef.h>
+
+#include "utils/crc.hh"
+
 #include "crc32_constants.hh"
 
-#define VMX_ALIGN       16
-#define VMX_ALIGN_MASK  (VMX_ALIGN-1)
+extern "C" {
+uint32_t __crc32_vpmsum(uint32_t crc, const uint8_t* p, size_t len);
+}
+
+namespace utils {
+static constexpr size_t vmx_align = 16;
+static constexpr size_t vmx_align_mask = vmx_align - 1;
 
 #ifdef REFLECT
 static uint32_t crc32_align(uint32_t crc, const uint8_t* p, size_t len)
@@ -44,10 +57,7 @@ static uint32_t crc32_align(uint32_t crc, const uint8_t* p, size_t len)
 }
 #endif
 
-uint32_t __crc32_vpmsum(uint32_t crc, const uint8_t* p, size_t len);
-
-uint32_t crc32_vpmsum(uint32_t crc, const uint8_t* p, size_t len)
-{
+uint32_t utils::crc32::crc32_vpmsum(uint32_t crc, const uint8_t* p, size_t len) {
     uint32_t prealign;
     uint32_t tail;
 
@@ -55,31 +65,32 @@ uint32_t crc32_vpmsum(uint32_t crc, const uint8_t* p, size_t len)
     crc ^= 0xffffffff;
 #endif
 
-    if (len < VMX_ALIGN + VMX_ALIGN_MASK) {
+    if (len < vmx_align + vmx_align_mask) {
         crc = crc32_align(crc, p, len);
         goto out;
     }
 
-    if ((unsigned long)p & VMX_ALIGN_MASK) {
-        prealign = VMX_ALIGN - ((unsigned long)p & VMX_ALIGN_MASK);
+    if ((unsigned long)p & vmx_align_mask) {
+        prealign = vmx_align - ((unsigned long)p & vmx_align_mask);
         crc = crc32_align(crc, p, prealign);
         len -= prealign;
         p += prealign;
     }
 
-    crc = __crc32_vpmsum(crc, p, len & ~VMX_ALIGN_MASK);
+    crc = __crc32_vpmsum(crc, p, len & ~vmx_align_mask);
 
-    tail = len & VMX_ALIGN_MASK;
+    tail = len & vmx_align_mask;
     if (tail) {
-        p += len & ~VMX_ALIGN_MASK;
+        p += len & ~vmx_align_mask;
         crc = crc32_align(crc, p, tail);
     }
 
-out:
+    out:
 #ifdef CRC_XOR
     crc ^= 0xffffffff;
 #endif
 
     return crc;
+}
 }
 #endif

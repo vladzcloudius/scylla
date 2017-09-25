@@ -53,7 +53,7 @@
 	.octa 0x0F0E0D0C0B0A09080706050403020100
 
 #define __ASSEMBLY__
-#include "crc32_constants.h"
+#include "crc32_constants.hh"
 
 	.text
 

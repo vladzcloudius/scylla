@@ -19,14 +19,17 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+// FIXME: remove me!!!
+#define __PPC64__
+
 #if defined(__PPC64__)
 #pragma once
-#define CRC 0x1edc6f41
+
+static constexpr uint32_t crc32c_polynomial = 0x1edc6f41;
 #define CRC_XOR
 #define REFLECT
 
 #ifndef __ASSEMBLY__
-#ifdef CRC_TABLE
 static const uint32_t crc_table[] = {
     0x00000000, 0xf26b8303, 0xe13b70f7, 0x1350f3f4,
     0xc79a971f, 0x35f1141c, 0x26a1e7e8, 0xd4ca64eb,
@@ -92,8 +95,6 @@ static const uint32_t crc_table[] = {
     0x34f4f86a, 0xc69f7b69, 0xd5cf889d, 0x27a40b9e,
     0x79b737ba, 0x8bdcb4b9, 0x988c474d, 0x6ae7c44e,
     0xbe2da0a5, 0x4c4623a6, 0x5f16d052, 0xad7d5351,};
-
-#endif
 #else
 #define MAX_SIZE	32768
 .constants:
