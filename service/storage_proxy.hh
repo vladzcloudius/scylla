@@ -73,12 +73,14 @@ public:
     enum class mutate_flags {
         raw_counters,
         counters,
+        dont_generate_hints,
         mutate_atomically
     };
 
     using mutate_flags_set = enum_set<super_enum<mutate_flags,
         mutate_flags::raw_counters,
         mutate_flags::counters,
+        mutate_flags::dont_generate_hints,
         mutate_flags::mutate_atomically>>;
 
 private:

@@ -366,9 +366,9 @@ void storage_proxy::unthrottle() {
 
 storage_proxy::response_id_type storage_proxy::register_response_handler(shared_ptr<abstract_write_response_handler>&& h, mutate_flags_set flags) {
     auto id = h->id();
-    auto e = _response_handlers.emplace(id, rh_entry(std::move(h), [this, id] {
+    auto e = _response_handlers.emplace(id, rh_entry(std::move(h), [this, id, hint_to_dead = !flags.contains(mutate_flags::dont_generate_hints)] {
         auto& e = _response_handlers.find(id)->second;
-        if (e.handler->_cl_achieved || e.handler->_cl == db::consistency_level::ANY) {
+        if (hint_to_dead && (e.handler->_cl_achieved || e.handler->_cl == db::consistency_level::ANY)) {
             // we are here because either cl was achieved, but targets left in the handler are not
             // responding, so a hint should be written for them, or cl == any in which case
             // hints are counted towards consistency, so we need to write hints and count how much was written
@@ -1122,13 +1122,15 @@ future<std::vector<storage_proxy::unique_response_handler>> storage_proxy::mutat
 
 future<> storage_proxy::mutate_begin(std::vector<unique_response_handler> ids, db::consistency_level cl, mutate_flags_set flags,
                                      stdx::optional<clock_type::time_point> timeout_opt) {
-    return parallel_for_each(ids, [this, cl, timeout_opt] (unique_response_handler& protected_response) {
+    return parallel_for_each(ids, [this, cl, timeout_opt, hint_to_dead = !flags.contains(mutate_flags::dont_generate_hints)] (unique_response_handler& protected_response) {
         auto response_id = protected_response.id;
-        // it is better to send first and hint afterwards to reduce latency
-        // but request may complete before hint_to_dead_endpoints() is called and
-        // response_id handler will be removed, so we will have to do hint with separate
-        // frozen_mutation copy, or manage handler live time differently.
-        hint_to_dead_endpoints(response_id, cl);
+        if (hint_to_dead) {
+            // it is better to send first and hint afterwards to reduce latency
+            // but request may complete before hint_to_dead_endpoints() is called and
+            // response_id handler will be removed, so we will have to do hint with separate
+            // frozen_mutation copy, or manage handler live time differently.
+            hint_to_dead_endpoints(response_id, cl);
+        }
 
         auto timeout = timeout_opt.value_or(clock_type::now() + std::chrono::milliseconds(_db.local().get_config().write_request_timeout_in_ms()));
         // call before send_to_live_endpoints() for the same reason as above
@@ -3656,7 +3658,8 @@ void storage_proxy::init_messaging_service() {
             }).then([trace_state_ptr = std::move(trace_state_ptr), &mutations, cl, timeout] {
                 auto sp = get_local_shared_storage_proxy();
 
-                return sp->mutate_counters_on_leader(std::move(mutations), cl, timeout, std::move(trace_state_ptr), mutate_flags_set::of<mutate_flags::counters>());
+                // don't hint on a replica side
+                return sp->mutate_counters_on_leader(std::move(mutations), cl, timeout, std::move(trace_state_ptr), mutate_flags_set::of<mutate_flags::counters, mutate_flags::dont_generate_hints>());
             });
         });
     });
