@@ -323,19 +323,22 @@ future<> batch_statement::execute_without_conditions(
 #endif
     verify_batch_size(mutations);
 
-    bool mutate_atomic = true;
+    using mutate_flags_set = service::storage_proxy::mutate_flags_set;
+    using mutate_flags = service::storage_proxy::mutate_flags;
+
+    mutate_flags_set mflags(mutate_flags_set::of<mutate_flags::mutate_atomically>());
     if (_type != type::LOGGED) {
         _stats.batches_pure_unlogged += 1;
-        mutate_atomic = false;
+        mflags.remove(mutate_flags::mutate_atomically);
     } else {
         if (mutations.size() > 1) {
             _stats.batches_pure_logged += 1;
         } else {
             _stats.batches_unlogged_from_logged += 1;
-            mutate_atomic = false;
+            mflags.remove(mutate_flags::mutate_atomically);
         }
     }
-    return storage.local().mutate_with_triggers(std::move(mutations), cl, mutate_atomic, std::move(tr_state));
+    return storage.local().mutate_with_triggers(std::move(mutations), cl, std::move(tr_state), mflags);
 }
 
 future<shared_ptr<cql_transport::messages::result_message>> batch_statement::execute_with_conditions(

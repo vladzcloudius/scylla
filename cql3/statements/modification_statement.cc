@@ -392,7 +392,12 @@ modification_statement::execute_without_condition(distributed<service::storage_p
             return now();
         }
 
-        return proxy.local().mutate_with_triggers(std::move(mutations), cl, false, qs.get_trace_state(), this->is_raw_counter_shard_write());
+        using sp = service::storage_proxy;
+
+        sp::mutate_flags_set mflags;
+        mflags.set_if<sp::mutate_flags::raw_counters>(this->is_raw_counter_shard_write());
+
+        return proxy.local().mutate_with_triggers(std::move(mutations), cl, qs.get_trace_state(), mflags);
     });
 }
 

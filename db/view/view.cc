@@ -844,11 +844,12 @@ void mutate_MV(const dht::token& base_token,
                                                                   cleanup,
                                                                   queryStartNanoTime));
 #endif
+                using sp = service::storage_proxy;
                 // FIXME: Temporary hack: send the write directly to paired_endpoint,
                 // without a batchlog, and without checking for success
                 // Note we don't wait for the asynchronous operation to complete
                 // FIXME: need to extend mut's lifetime???
-                service::get_local_storage_proxy().send_to_endpoint(mut, *paired_endpoint, db::write_type::VIEW).handle_exception([paired_endpoint] (auto ep) {
+                service::get_local_storage_proxy().send_to_endpoint(mut, *paired_endpoint, db::write_type::VIEW, sp::mutate_flags_set()).handle_exception([paired_endpoint] (auto ep) {
                     vlogger.error("Error applying view update to {}: {}", *paired_endpoint, ep);
                 });;
             }

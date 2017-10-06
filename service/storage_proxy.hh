@@ -69,6 +69,18 @@ class mutation_holder;
 class storage_proxy : public seastar::async_sharded_service<storage_proxy> /*implements StorageProxyMBean*/ {
 public:
     using clock_type = lowres_clock;
+
+    enum class mutate_flags {
+        raw_counters,
+        counters,
+        mutate_atomically
+    };
+
+    using mutate_flags_set = enum_set<super_enum<mutate_flags,
+        mutate_flags::raw_counters,
+        mutate_flags::counters,
+        mutate_flags::mutate_atomically>>;
+
 private:
     struct rh_entry {
         ::shared_ptr<abstract_write_response_handler> handler;
@@ -226,15 +238,15 @@ private:
 private:
     void uninit_messaging_service();
     future<foreign_ptr<lw_shared_ptr<query::result>>> query_singular(lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector&& partition_ranges, db::consistency_level cl, tracing::trace_state_ptr trace_state);
-    response_id_type register_response_handler(shared_ptr<abstract_write_response_handler>&& h);
+    response_id_type register_response_handler(shared_ptr<abstract_write_response_handler>&& h, mutate_flags_set flags);
     void remove_response_handler(response_id_type id);
     void got_response(response_id_type id, gms::inet_address from);
     future<> response_wait(response_id_type id, clock_type::time_point timeout);
     ::shared_ptr<abstract_write_response_handler>& get_write_response_handler(storage_proxy::response_id_type id);
     response_id_type create_write_response_handler(keyspace& ks, db::consistency_level cl, db::write_type type, std::unique_ptr<mutation_holder> m, std::unordered_set<gms::inet_address> targets,
-            const std::vector<gms::inet_address>& pending_endpoints, std::vector<gms::inet_address>, tracing::trace_state_ptr tr_state);
-    response_id_type create_write_response_handler(const mutation&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state);
-    response_id_type create_write_response_handler(const std::unordered_map<gms::inet_address, std::experimental::optional<mutation>>&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state);
+            const std::vector<gms::inet_address>& pending_endpoints, std::vector<gms::inet_address>, tracing::trace_state_ptr tr_state, mutate_flags_set flags);
+    response_id_type create_write_response_handler(const mutation&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, mutate_flags_set flags);
+    response_id_type create_write_response_handler(const std::unordered_map<gms::inet_address, std::experimental::optional<mutation>>&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, mutate_flags_set flags);
     void send_to_live_endpoints(response_id_type response_id, clock_type::time_point timeout);
     template<typename Range>
     size_t hint_to_dead_endpoints(std::unique_ptr<mutation_holder>& mh, const Range& targets) noexcept;
@@ -269,15 +281,15 @@ private:
     template<typename Range, typename CreateWriteHandler>
     future<std::vector<unique_response_handler>> mutate_prepare(const Range& mutations, db::consistency_level cl, db::write_type type, CreateWriteHandler handler);
     template<typename Range>
-    future<std::vector<unique_response_handler>> mutate_prepare(const Range& mutations, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state);
-    future<> mutate_begin(std::vector<unique_response_handler> ids, db::consistency_level cl, stdx::optional<clock_type::time_point> timeout_opt = { });
+    future<std::vector<unique_response_handler>> mutate_prepare(const Range& mutations, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, mutate_flags_set flags);
+    future<> mutate_begin(std::vector<unique_response_handler> ids, db::consistency_level cl, mutate_flags_set flags, stdx::optional<clock_type::time_point> timeout_opt = { });
     future<> mutate_end(future<> mutate_result, utils::latency_counter, tracing::trace_state_ptr trace_state);
     future<> schedule_repair(std::unordered_map<dht::token, std::unordered_map<gms::inet_address, std::experimental::optional<mutation>>> diffs, db::consistency_level cl, tracing::trace_state_ptr trace_state);
     bool need_throttle_writes() const;
     void unthrottle();
     void handle_read_error(std::exception_ptr eptr, bool range);
     template<typename Range>
-    future<> mutate_internal(Range mutations, db::consistency_level cl, bool counter_write, tracing::trace_state_ptr tr_state, stdx::optional<clock_type::time_point> timeout_opt = { });
+    future<> mutate_internal(Range mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state, mutate_flags_set flags, stdx::optional<clock_type::time_point> timeout_opt = { });
     future<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature> query_nonsingular_mutations_locally(
             schema_ptr s, lw_shared_ptr<query::read_command> cmd, const dht::partition_range_vector&& pr, tracing::trace_state_ptr trace_state, uint64_t max_size);
 
@@ -286,13 +298,13 @@ private:
         schema_ptr s;
     };
     future<> mutate_counters_on_leader(std::vector<frozen_mutation_and_schema> mutations, db::consistency_level cl, clock_type::time_point timeout,
-                                       tracing::trace_state_ptr trace_state);
+                                       tracing::trace_state_ptr trace_state, mutate_flags_set flags);
     future<> mutate_counter_on_leader_and_replicate(const schema_ptr& s, frozen_mutation m, db::consistency_level cl, clock_type::time_point timeout,
-                                                    tracing::trace_state_ptr trace_state);
+                                                    tracing::trace_state_ptr trace_state, mutate_flags_set flags);
 
     gms::inet_address find_leader_for_counter_update(const mutation& m, db::consistency_level cl);
 
-    future<> do_mutate(std::vector<mutation> mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state, bool);
+    future<> do_mutate(std::vector<mutation> mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state, mutate_flags_set flags);
     friend class mutate_executor;
 public:
     storage_proxy(distributed<database>& db);
@@ -324,17 +336,18 @@ public:
     * @param mutations the mutations to be applied across the replicas
     * @param consistency_level the consistency level for the operation
     * @param tr_state trace state handle
+    * @param flags flags for this mutation
     */
-    future<> mutate(std::vector<mutation> mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state, bool raw_counters = false);
+    future<> mutate(std::vector<mutation> mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state, mutate_flags_set flags = mutate_flags_set());
 
-    future<> replicate_counter_from_leader(mutation m, db::consistency_level cl, tracing::trace_state_ptr tr_state,
+    future<> replicate_counter_from_leader(mutation m, db::consistency_level cl, tracing::trace_state_ptr tr_state, mutate_flags_set flags,
                                            clock_type::time_point timeout);
 
     template<typename Range>
-    future<> mutate_counters(Range&& mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state);
+    future<> mutate_counters(Range&& mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state, mutate_flags_set flags);
 
     future<> mutate_with_triggers(std::vector<mutation> mutations, db::consistency_level cl,
-                                  bool should_mutate_atomically, tracing::trace_state_ptr tr_state, bool raw_counters = false);
+                                  tracing::trace_state_ptr tr_state, mutate_flags_set flags = mutate_flags_set());
 
     /**
     * See mutate. Adds additional steps before and after writing a batch.
@@ -352,7 +365,7 @@ public:
     // Inspired by Cassandra's StorageProxy.sendToHintedEndpoints but without
     // hinted handoff support, and just one target. See also
     // send_to_live_endpoints() - another take on the same original function.
-    future<> send_to_endpoint(mutation m, gms::inet_address target, db::write_type type);
+    future<> send_to_endpoint(mutation m, gms::inet_address target, db::write_type type, mutate_flags_set flags);
 
     /**
      * Performs the truncate operatoin, which effectively deletes all data from
