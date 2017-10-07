@@ -91,10 +91,7 @@ const sstring storage_proxy::REPLICA_STATS_CATEGORY("storage_proxy_replica");
 distributed<service::storage_proxy> _the_storage_proxy;
 
 using namespace exceptions;
-
-static inline bool is_me(gms::inet_address from) {
-    return from == utils::fb_utilities::get_broadcast_address();
-}
+using fbu = utils::fb_utilities;
 
 static inline
 const dht::token& start_token(const dht::partition_range& r) {
@@ -295,7 +292,7 @@ public:
 
 class datacenter_write_response_handler : public abstract_write_response_handler {
     void signal(gms::inet_address from) override {
-        if (is_me(from) || db::is_local(from)) {
+        if (fbu::is_me(from) || db::is_local(from)) {
             abstract_write_response_handler::signal();
         }
     }
@@ -460,7 +457,7 @@ storage_proxy::stats::stats()
         , mutation_data_read_errors(COORDINATOR_STATS_CATEGORY, "read_errors", "number of mutation data read requests that failed", "mutation_data") {}
 
 inline uint64_t& storage_proxy::split_stats::get_ep_stat(gms::inet_address ep) {
-    if (is_me(ep)) {
+    if (fbu::is_me(ep)) {
         return _local.val;
     }
 
@@ -1882,7 +1879,7 @@ public:
         return std::find_if(_digest_results.begin() + 1, _digest_results.end(), [&first] (query::result_digest digest) { return digest != first; }) == _digest_results.end();
     }
     bool waiting_for(gms::inet_address ep) {
-        return db::is_datacenter_local(_cl) ? is_me(ep) || db::is_local(ep) : true;
+        return db::is_datacenter_local(_cl) ? fbu::is_me(ep) || db::is_local(ep) : true;
     }
     void got_response(gms::inet_address ep) {
         if (!_cl_reported) {
@@ -2434,7 +2431,7 @@ public:
 protected:
     future<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature> make_mutation_data_request(lw_shared_ptr<query::read_command> cmd, gms::inet_address ep, clock_type::time_point timeout) {
         ++_proxy->_stats.mutation_data_read_attempts.get_ep_stat(ep);
-        if (is_me(ep)) {
+        if (fbu::is_me(ep)) {
             tracing::trace(_trace_state, "read_mutation_data: querying locally");
             return _proxy->query_mutations_locally(_schema, cmd, _partition_range, _trace_state);
         } else {
@@ -2448,7 +2445,7 @@ protected:
     }
     future<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature> make_data_request(gms::inet_address ep, clock_type::time_point timeout, bool want_digest) {
         ++_proxy->_stats.data_read_attempts.get_ep_stat(ep);
-        if (is_me(ep)) {
+        if (fbu::is_me(ep)) {
             tracing::trace(_trace_state, "read_data: querying locally");
             auto qrr = want_digest ? query::result_request::result_and_digest : query::result_request::only_result;
             return _proxy->query_result_local(_schema, _cmd, _partition_range, qrr, _trace_state);
@@ -2464,7 +2461,7 @@ protected:
     }
     future<query::result_digest, api::timestamp_type, cache_temperature> make_digest_request(gms::inet_address ep, clock_type::time_point timeout) {
         ++_proxy->_stats.digest_read_attempts.get_ep_stat(ep);
-        if (is_me(ep)) {
+        if (fbu::is_me(ep)) {
             tracing::trace(_trace_state, "read_digest: querying locally");
             return _proxy->query_result_local_digest(_schema, _cmd, _partition_range, _trace_state);
         } else {
