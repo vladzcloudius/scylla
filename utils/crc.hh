@@ -130,7 +130,7 @@ public:
     template <class T>
     void process_be(T in) {
         static_assert(std::is_integral<T>::value, "T must be integral type.");
-        in = net::hton(in);
+        in = seastar::net::hton(in);
         _r = crc32_vpmsum(_r, reinterpret_cast<const uint8_t*>(&in), sizeof(T));
     }
 
