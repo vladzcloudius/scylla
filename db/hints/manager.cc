@@ -41,6 +41,9 @@ const std::chrono::seconds manager::hint_file_write_timeout = std::chrono::secon
 const std::chrono::seconds manager::hints_timer_period = std::chrono::seconds(20);
 const std::chrono::seconds manager::space_watchdog::_watchdog_period = std::chrono::seconds(1);
 const std::chrono::minutes manager::end_point_hints_manager::_column_mapping_cache_flush_period = std::chrono::minutes(2);
+// TODO: remove this when we switch to C++17
+constexpr size_t manager::_max_hints_send_queue_length;
+
 size_t db::hints::manager::max_shard_disk_space_size;
 
 manager::manager(sstring hints_directory, std::vector<sstring> hinted_dcs, int64_t max_hint_window_ms, distributed<database>& db)
