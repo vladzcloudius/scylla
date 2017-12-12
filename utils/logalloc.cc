@@ -39,38 +39,15 @@
 #include "log.hh"
 #include "utils/dynamic_bitset.hh"
 #include "utils/log_heap.hh"
+#include "utils/lazy_initialized.hh"
 
 namespace bi = boost::intrusive;
 
 standard_allocation_strategy standard_allocation_strategy_instance;
 
-template <typename T>
-class lazy_initialized {
-    bool _initialized;
-    std::aligned_storage_t<sizeof(T)> _data;
-public:
-    ~lazy_initialized() {
-        uninit();
-    }
 
-    template <typename... Args> void init(Args&&... args) {
-        new (&_data) T(std::forward<Args>(args)...);
-        _initialized = true;
-    }
-    void uninit() {
-        if (_initialized) {
-            delete &get();
-            _initialized = false;
-        }
-    }
-    T* operator->() { return get(); }
-    T& get() { return *reinterpret_cast<T*>(&_data); }
-    explicit operator bool() const {
-        return _initialized;
-    }
-};
 
-static lazy_initialized<std::vector<const migrate_fn_type*>> migrators_vec;
+static utils::lazy_initialized<std::vector<const migrate_fn_type*>> migrators_vec;
 
 static
 std::vector<const migrate_fn_type*>&
