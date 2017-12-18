@@ -46,6 +46,7 @@
 #include <seastar/core/sharded.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/metrics_registration.hh>
+#include <utils/lazy_initialized.hh>
 #include "gc_clock.hh"
 #include "utils/UUID.hh"
 #include "gms/inet_address.hh"
@@ -413,9 +414,12 @@ public:
 
     static seastar::sharded<tracing>& tracing_instance() {
         // FIXME: leaked intentionally to avoid shutdown problems, see #293
-        static seastar::sharded<tracing>* tracing_inst = new seastar::sharded<tracing>();
+        static utils::lazy_initialized<seastar::sharded<tracing>> tracing_inst;
 
-        return *tracing_inst;
+        if (!tracing_inst) {
+            tracing_inst.init();
+        }
+        return tracing_inst.get();
     }
 
     static tracing& get_local_tracing_instance() {
