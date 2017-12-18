@@ -212,7 +212,7 @@ std::ostream& operator<<(std::ostream& os, const span_id& id) {
     return os << id.get_id();
 }
 
-static seastar::sharded<tracing>& tracing::tracing_instance() {
+seastar::sharded<tracing>& tracing::tracing_instance() {
     // FIXME: leaked intentionally to avoid shutdown problems, see #293
     static utils::lazy_initialized<seastar::sharded<tracing>> tracing_inst;
 
