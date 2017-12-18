@@ -412,15 +412,7 @@ public:
         return _thread_name;
     }
 
-    static seastar::sharded<tracing>& tracing_instance() {
-        // FIXME: leaked intentionally to avoid shutdown problems, see #293
-        static utils::lazy_initialized<seastar::sharded<tracing>> tracing_inst;
-
-        if (!tracing_inst) {
-            tracing_inst.init();
-        }
-        return tracing_inst.get();
-    }
+    static seastar::sharded<tracing>& tracing_instance();
 
     static tracing& get_local_tracing_instance() {
         return tracing_instance().local();
