@@ -36,6 +36,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <utils/lazy_initialized.hh>
 #include "locator/snitch_base.hh"
 
 namespace locator {
@@ -142,6 +143,15 @@ future<> i_endpoint_snitch::stop_snitch() {
     return snitch_instance().invoke_on(io_cpu_id(), [] (snitch_ptr& s) {
         return s->stop();
     }).then([] { return snitch_instance().stop(); });
+}
+
+static utils::lazy_initialized<distributed<snitch_ptr>> snitch_inst;
+
+distributed<snitch_ptr>& i_endpoint_snitch::snitch_instance() {
+    if (!snitch_inst) {
+        snitch_inst.init();
+    }
+    return snitch_inst.get();
 }
 
 } // namespace locator

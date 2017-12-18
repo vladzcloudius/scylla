@@ -149,12 +149,7 @@ public:
     virtual void set_prefer_local(bool prefer_local) {};
     virtual void set_local_private_addr(const sstring& addr_str) {};
 
-    static distributed<snitch_ptr>& snitch_instance() {
-        // FIXME: leaked intentionally to avoid shutdown problems, see #293
-        static distributed<snitch_ptr>* snitch_inst = new distributed<snitch_ptr>();
-
-        return *snitch_inst;
-    }
+    static distributed<snitch_ptr>& snitch_instance();
 
     static snitch_ptr& get_local_snitch_ptr() {
         return snitch_instance().local();
