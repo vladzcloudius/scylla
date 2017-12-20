@@ -48,6 +48,7 @@
 #include "db/system_keyspace.hh"
 #include "db/schema_tables.hh"
 #include "tracing/trace_keyspace_helper.hh"
+#include "storage_service.hh"
 
 void service::client_state::set_login(::shared_ptr<auth::authenticated_user> user) {
     if (user == nullptr) {
@@ -203,5 +204,30 @@ future<> service::client_state::ensure_has_permission(auth::permission p, auth::
                                             resource));
         }
     });
+}
+
+service::client_state::client_state(service::client_state::request_copy_tag, const service::client_state& orig, api::timestamp_type ts)
+        : _keyspace(orig._keyspace)
+        , _cpu_of_origin(engine().cpu_id())
+        , _is_internal(orig._is_internal)
+        , _is_thrift(orig._is_thrift)
+        , _remote_address(orig._remote_address)
+        , _auth_service(orig._auth_service)
+        , _request_ts(ts)
+{
+    assert(!orig._trace_state_ptr);
+
+    if (orig._user) {
+        if (_cpu_of_origin != orig._cpu_of_origin) {
+            // if we moved to another shard create a local copy of authenticated_user
+            _user = ::make_shared<auth::authenticated_user>(*orig._user);
+        } else {
+            _user = orig._user;
+        }
+    }
+
+    if (_auth_service && _cpu_of_origin != orig._cpu_of_origin) {
+        _auth_service = &service::get_local_storage_service().get_local_auth_service();
+    }
 }
 
