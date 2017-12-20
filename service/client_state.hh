@@ -62,6 +62,7 @@ class client_state {
 private:
     sstring _keyspace;
     tracing::trace_state_ptr _trace_state_ptr;
+    unsigned _cpu_of_origin;
 #if 0
     private static final Logger logger = LoggerFactory.getLogger(ClientState.class);
     public static final SemanticVersion DEFAULT_CQL_VERSION = org.apache.cassandra.cql3.QueryProcessor.CQL_VERSION;
@@ -104,10 +105,13 @@ private:
 public:
     struct internal_tag {};
     struct external_tag {};
+    struct request_copy_tag {};
 
     void create_tracing_session(tracing::trace_type type, tracing::trace_state_props_set props) {
         _trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(type, props);
     }
+
+    client_state create_request_copy();
 
     tracing::trace_state_ptr& get_trace_state() {
         return _trace_state_ptr;
@@ -117,8 +121,20 @@ public:
         return _trace_state_ptr;
     }
 
+    client_state(request_copy_tag, const client_state& orig)
+            : _keyspace(orig._keyspace)
+            , _cpu_of_origin(engine().cpu_id())
+            , _is_internal(orig._is_internal)
+            , _is_thrift(orig._is_thrift)
+            , _remote_address(orig._remote_address)
+            , _auth_service(orig._auth_service)
+    {
+        assert(!orig._trace_state_ptr);
+    }
+
     client_state(external_tag, auth::service& auth_service, const socket_address& remote_address = socket_address(), bool thrift = false)
-            : _is_internal(false)
+            : _cpu_of_origin(engine().cpu_id())
+            , _is_internal(false)
             , _is_thrift(thrift)
             , _remote_address(remote_address)
             , _auth_service(&auth_service) {
@@ -131,7 +147,12 @@ public:
         return gms::inet_address(_remote_address);
     }
 
-    client_state(internal_tag) : _keyspace("system"), _is_internal(true), _is_thrift(false) {}
+    client_state(internal_tag)
+            : _keyspace("system")
+            , _cpu_of_origin(engine().cpu_id())
+            , _is_internal(true)
+            , _is_thrift(false)
+    {}
 
     // `nullptr` for internal instances.
     auth::service* get_auth_service() {

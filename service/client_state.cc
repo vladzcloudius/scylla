@@ -205,3 +205,17 @@ future<> service::client_state::ensure_has_permission(auth::permission p, auth::
     });
 }
 
+service::client_state service::client_state::create_request_copy() {
+    service::client_state state(request_copy_tag(), *this);
+
+    if (_user) {
+        if (state._cpu_of_origin != _cpu_of_origin) {
+            // if we moved to another shard create a local copy of authenticated_user
+            state._user = ::make_shared<auth::authenticated_user>(_user->name());
+        } else {
+            state._user = _user;
+        }
+    }
+    
+    return state;
+}
