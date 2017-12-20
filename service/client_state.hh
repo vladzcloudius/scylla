@@ -286,6 +286,16 @@ public:
 private:
     future<> has_access(const sstring&, auth::permission, auth::resource) const;
 
+    client_state(request_copy_tag, const client_state& orig)
+            : _keyspace(orig._keyspace)
+            , _cpu_of_origin(engine().cpu_id())
+            , _is_internal(orig._is_internal)
+            , _is_thrift(orig._is_thrift)
+            , _remote_address(orig._remote_address)
+    {
+        assert(!orig._trace_state_ptr);
+    }
+
 public:
     future<bool> check_has_permission(auth::permission, auth::resource) const;
     future<> ensure_has_permission(auth::permission, auth::resource) const;
