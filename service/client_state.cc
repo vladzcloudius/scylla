@@ -48,6 +48,7 @@
 #include "db/system_keyspace.hh"
 #include "db/schema_tables.hh"
 #include "tracing/trace_keyspace_helper.hh"
+#include "storage_service.hh"
 
 void service::client_state::set_login(::shared_ptr<auth::authenticated_user> user) {
     if (user == nullptr) {
@@ -205,17 +206,24 @@ future<> service::client_state::ensure_has_permission(auth::permission p, auth::
     });
 }
 
-service::client_state service::client_state::create_request_copy() {
+service::client_state service::client_state::create_request_copy(api::timestamp_type ts) {
     service::client_state state(request_copy_tag(), *this);
 
     if (_user) {
         if (state._cpu_of_origin != _cpu_of_origin) {
             // if we moved to another shard create a local copy of authenticated_user
-            state._user = ::make_shared<auth::authenticated_user>(_user->name());
+            state._user = ::make_shared<auth::authenticated_user>(*_user);
         } else {
             state._user = _user;
         }
     }
+
+    state._auth_service = _auth_service;
+    if (_auth_service && state._cpu_of_origin != _cpu_of_origin) {
+        state._auth_service = &service::get_local_storage_service().get_local_auth_service();
+    }
+
+    state._request_ts = ts;
     
     return state;
 }
