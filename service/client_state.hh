@@ -102,6 +102,10 @@ private:
 
     // Only populated for external client state.
     auth::service* _auth_service{nullptr};
+
+    // Only set for "request copy"
+    stdx::optional<api::timestamp_type> _request_ts;
+
 public:
     struct internal_tag {};
     struct external_tag {};
@@ -111,7 +115,7 @@ public:
         _trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(type, props);
     }
 
-    client_state create_request_copy();
+    client_state create_request_copy(api::timestamp_type ts);
 
     tracing::trace_state_ptr& get_trace_state() {
         return _trace_state_ptr;
@@ -119,17 +123,6 @@ public:
 
     const tracing::trace_state_ptr& get_trace_state() const {
         return _trace_state_ptr;
-    }
-
-    client_state(request_copy_tag, const client_state& orig)
-            : _keyspace(orig._keyspace)
-            , _cpu_of_origin(engine().cpu_id())
-            , _is_internal(orig._is_internal)
-            , _is_thrift(orig._is_thrift)
-            , _remote_address(orig._remote_address)
-            , _auth_service(orig._auth_service)
-    {
-        assert(!orig._trace_state_ptr);
     }
 
     client_state(external_tag, auth::service& auth_service, const socket_address& remote_address = socket_address(), bool thrift = false)
@@ -198,6 +191,10 @@ public:
      * in the sequence seen, even if multiple updates happen in the same millisecond.
      */
     api::timestamp_type get_timestamp() {
+        if (_request_ts) {
+            return *_request_ts;
+        }
+
         auto current = api::new_timestamp();
         auto last = _last_timestamp_micros;
         auto result = last >= current ? last + 1 : current;
@@ -267,6 +264,16 @@ public:
 
 private:
     future<> has_access(const sstring&, auth::permission, auth::resource) const;
+
+    client_state(request_copy_tag, const client_state& orig)
+            : _keyspace(orig._keyspace)
+            , _cpu_of_origin(engine().cpu_id())
+            , _is_internal(orig._is_internal)
+            , _is_thrift(orig._is_thrift)
+            , _remote_address(orig._remote_address)
+    {
+        assert(!orig._trace_state_ptr);
+    }
 
 public:
     future<bool> check_has_permission(auth::permission, auth::resource) const;
