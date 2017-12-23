@@ -102,8 +102,10 @@ struct cql_query_state {
 class cql_server {
 private:
     class event_notifier;
+    using load_balancer_clock = seastar::lowres_clock;
 
     static constexpr cql_protocol_version_type current_version = cql_serialization_format::latest_version;
+    static const load_balancer_clock::duration load_balancer_period;
 
     std::vector<server_socket> _listeners;
     distributed<service::storage_proxy>& _proxy;
@@ -120,7 +122,11 @@ private:
     uint64_t _requests_serving = 0;
     uint64_t _requests_blocked_memory = 0;
     cql_load_balance _lb;
+    std::vector<unsigned> _shards_pool;
+    seastar::gate _load_balance_timer_gate;
+    timer<load_balancer_clock> _load_balance_timer;
     auth::service& _auth_service;
+
 public:
     cql_server(distributed<service::storage_proxy>& proxy, distributed<cql3::query_processor>& qp, cql_load_balance lb, auth::service&);
     future<> listen(ipv4_addr addr, std::shared_ptr<seastar::tls::credentials_builder> = {}, bool keepalive = false);
@@ -146,7 +152,7 @@ private:
         cql_serialization_format _cql_serialization_format = cql_serialization_format::latest();
         service::client_state _client_state;
         std::unordered_map<uint16_t, cql_query_state> _query_states;
-        unsigned _request_cpu = 0;
+        unsigned _request_cpu_idx = 0;
 
         enum class state : uint8_t {
             UNINITIALIZED, AUTHENTICATION, READY
@@ -244,6 +250,8 @@ private:
             _all_connections_stopped.set_value();
         }
     }
+
+    void build_shards_pool();
 };
 
 class cql_server::event_notifier : public service::migration_listener,
