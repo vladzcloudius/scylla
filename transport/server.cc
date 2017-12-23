@@ -86,6 +86,8 @@ enum class cql_binary_opcode : uint8_t {
     AUTH_SUCCESS   = 16,
 };
 
+const cql_server::load_balancer_clock::duration cql_server::load_balancer_period = std::chrono::seconds(1);
+
 inline db::consistency_level wire_to_consistency(int16_t v)
 {
      switch (v) {
@@ -267,6 +269,7 @@ cql_server::cql_server(distributed<service::storage_proxy>& proxy, distributed<c
     , _memory_available(_max_request_size)
     , _notifier(std::make_unique<event_notifier>())
     , _lb(lb)
+    , _load_balance_timer([this] { build_shards_pool(); })
     , _auth_service(auth_service)
 {
     namespace sm = seastar::metrics;
@@ -297,6 +300,12 @@ cql_server::cql_server(distributed<service::storage_proxy>& proxy, distributed<c
                                             "The first derivative of this value shows how often we block due to memory exhaustion in the \"CQL transport\" component.", _max_request_size))),
 
     });
+
+    if (_lb != cql_load_balance::none) {
+        // First entry should always be the local shard
+        _shards_pool.emplace_back(engine().cpu_id());
+        _load_balance_timer.arm(load_balancer_period);
+    }
 }
 
 future<> cql_server::stop() {
@@ -310,13 +319,15 @@ future<> cql_server::stop() {
     }
     auto nr_conn = make_lw_shared<size_t>(0);
     auto nr_conn_total = _connections_list.size();
-    clogger.debug("cql_server: shutdown connection nr_total={}", nr_conn_total);
-    return parallel_for_each(_connections_list.begin(), _connections_list.end(), [nr_conn, nr_conn_total] (auto&& c) {
-        return c.shutdown().then([nr_conn, nr_conn_total] {
-            clogger.debug("cql_server: shutdown connection {} out of {} done", ++(*nr_conn), nr_conn_total);
+    return _load_balance_timer_gate.close().finally([this] { _load_balance_timer.cancel(); }).finally([this, nr_conn, nr_conn_total] {
+        clogger.debug("cql_server: shutdown connection nr_total={}", nr_conn_total);
+        return parallel_for_each(_connections_list.begin(), _connections_list.end(), [nr_conn, nr_conn_total] (auto&& c) {
+            return c.shutdown().then([nr_conn, nr_conn_total] {
+                clogger.debug("cql_server: shutdown connection {} out of {} done", ++(*nr_conn), nr_conn_total);
+            });
+        }).then([this] {
+            return std::move(_stopped);
         });
-    }).then([this] {
-        return std::move(_stopped);
     });
 }
 
@@ -748,10 +759,50 @@ future<temporary_buffer<char>> cql_server::connection::read_and_decompress_frame
     return _read_buf.read_exactly(length);
 }
 
+void cql_server::build_shards_pool() {
+    with_gate(_load_balance_timer_gate, [this] {
+        return do_with(std::vector<unsigned>(), [this] (std::vector<unsigned>& new_shards_pool) {
+            new_shards_pool.reserve(smp::count);
+
+            // First, put the "local" shard entry.
+            new_shards_pool.emplace_back(engine().cpu_id());
+
+            // If the current shard is loaded less than start_offload_threshold then there's nothing to balance - end here.
+            double local_load = engine().get_load();
+            if (local_load > start_offload_threshold) {
+                std::exchange(_shards_pool, std::move(new_shards_pool));
+                return make_ready_future<>();
+            }
+
+            return parallel_for_each(boost::irange<unsigned>(0, smp::count), [&new_shards_pool, local_load] (unsigned c) {
+                // Skip the local shard.
+                if (c == engine().cpu_id()) {
+                    return make_ready_future<>();
+                }
+
+                return smp::submit_to(c, [] {
+                    return engine().get_load();
+                }).then([&new_shards_pool, local_load, c] (double load) {
+                    // Use the remote shard only if its load is below start_offload_threshold (don't offload to the shard that offloades by itself)
+                    // and if its load is lower than the load of the local shard by at least can_accept_requests_load_factor.
+                    if (load > start_offload_threshold && load > local_load * can_accept_requests_load_factor) {
+                        new_shards_pool.emplace_back(c);
+                    }
+                });
+            }).then([this, &new_shards_pool] {
+                std::exchange(_shards_pool, std::move(new_shards_pool));
+            });
+        }).finally([this] {
+            _load_balance_timer.arm(load_balancer_period);
+        });
+    });
+}
+
 unsigned cql_server::connection::pick_request_cpu()
 {
     if (_server._lb == cql_load_balance::round_robin) {
-        return _request_cpu++ % smp::count;
+        auto& shards_pull= _server._shards_pool;
+        return shards_pull[_request_cpu_idx++ % shards_pull.size()];
     }
     return engine().cpu_id();
 }
