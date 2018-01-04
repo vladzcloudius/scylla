@@ -774,9 +774,7 @@ void cql_server::build_shards_pool() {
                 return make_ready_future<>();
             }
 
-            unsigned start_shard = align_down<unsigned>(engine().cpu_id(), 8);
-
-            return parallel_for_each(boost::irange<unsigned>(start_shard, 8), [&new_shards_pool, local_load] (unsigned c) {
+            return parallel_for_each(boost::irange<unsigned>(0, smp::count), [&new_shards_pool, local_load] (unsigned c) {
                 // Skip the local shard.
                 if (c == engine().cpu_id()) {
                     return make_ready_future<>();
