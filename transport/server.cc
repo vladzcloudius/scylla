@@ -782,8 +782,9 @@ void cql_server::build_shards_pool() {
                 return smp::submit_to(c, [] {
                     return engine().get_load();
                 }).then([&new_shards_pool, local_load, c] (double load) {
-                    // Use the remote shard only if its load is below 95% and if its load is lower than the load of the local shard.
-                    if (load > 0.05 && load > local_load) {
+                    // Use the remote shard only if its load is below 75% (don't offload to the shard that offloades by itself)
+                    // and if its load is lower than the load of the local shard by at least 25%.
+                    if (load > 0.25 && load > local_load * 1.25) {
                         new_shards_pool.emplace_back(c);
                     }
                 });
