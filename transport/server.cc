@@ -771,7 +771,6 @@ void cql_server::build_shards_pool() {
             double local_load = engine().get_load();
             if (local_load > 0.25) {
                 std::exchange(_shards_pool, std::move(new_shards_pool));
-                _load_balance_timer.arm(load_balancer_period);
                 return make_ready_future<>();
             }
 
