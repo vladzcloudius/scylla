@@ -770,10 +770,14 @@ void cql_server::build_shards_pool() {
             // If the current shard is loaded less than 75% then there's nothing to balance - end here.
             double local_load = engine().get_load();
             if (local_load > 0.25) {
+                std::exchange(_shards_pool, std::move(new_shards_pool));
+                _load_balance_timer.arm(load_balancer_period);
                 return make_ready_future<>();
             }
 
-            return parallel_for_each(boost::irange<unsigned>(0, smp::count), [&new_shards_pool, local_load] (unsigned c) {
+            unsigned start_shard = align_down<unsigned>(engine().cpu_id(), 8);
+
+            return parallel_for_each(boost::irange<unsigned>(start_shard, 8), [&new_shards_pool, local_load] (unsigned c) {
                 // Skip the local shard.
                 if (c == engine().cpu_id()) {
                     return make_ready_future<>();
