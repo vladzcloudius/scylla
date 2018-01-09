@@ -786,9 +786,7 @@ cql_server::load_balancer::load_balancer(cql_load_balance lb)
 
 void cql_server::load_balancer::collect_loads() {
     with_gate(_loads_collector_timer_gate, [this] {
-        return do_with(std::vector<double>(), [this] (std::vector<double>& new_loads) {
-            new_loads.reserve(smp::count);
-
+        return do_with(std::vector<double>(smp::count), [this] (std::vector<double>& new_loads) {
             // TODO: If only we had a map() method outside the "sharded" class...
             return parallel_for_each(boost::irange<unsigned>(0, smp::count), [&new_loads](unsigned c) {
                 return smp::submit_to(c, [] {
