@@ -86,6 +86,8 @@ enum class cql_binary_opcode : uint8_t {
     AUTH_SUCCESS   = 16,
 };
 
+const cql_server::load_balancer::load_balancer_clock::duration cql_server::load_balancer::load_balancer_period = std::chrono::seconds(1);
+
 inline db::consistency_level wire_to_consistency(int16_t v)
 {
      switch (v) {
