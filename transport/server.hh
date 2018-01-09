@@ -102,20 +102,54 @@ struct cql_query_state {
 class cql_server {
 private:
     class event_notifier;
-    using load_balancer_clock = seastar::lowres_clock;
+
+    class load_balancer {
+        ///
+        /// Coordinator load balancing thresholds. Note that our "load" counters are inverted thus thresholds below and the
+        /// corresponding logic are inverted too.
+        ///
+
+        // Load level above which the local shard will start offloading requests to remote nodes
+        static constexpr double start_offload_threshold = 0.25; // corresponds to the load of 75%
+        // The ratio of the "destination" shard load compared to the local shard load which allows offloading requests to it (see cql_server::build_shards_pool() description)
+        static constexpr double can_accept_requests_load_factor = 1.25;
+
+        using load_balancer_clock = lowres_clock;
+        static const load_balancer_clock::duration load_balancer_period;
+
+    private:
+        cql_load_balance _lb;
+        std::vector<unsigned> _shards_pool;
+        std::vector<double> _loads;
+        gate _loads_collector_timer_gate;
+        timer<load_balancer_clock> _loads_collector_timer;
+        gate _load_balance_timer_gate;
+        timer<load_balancer_clock> _load_balance_timer;
+        unsigned _request_cpu_idx = 0;
+
+    public:
+        load_balancer(cql_load_balance lb);
+        future<> stop();
+        unsigned pick_request_cpu() noexcept;
+
+    private:
+        /// \brief Collect _load values from all shards. Runs on shard0 only.
+        void collect_loads();
+
+        /// \brief Build the pool of shards to offload requests processing to.
+        ///
+        /// - Offload the work only if the local shard is loaded above or equal to start_offload_threshold.
+        /// - Don't offload to the remote shard if:
+        ///   - Its load is above or equal the start_offload_threshold (namely the remote shard offloads work by itself) or
+        ///   - When the "remote shard load"/"local shard load" ratio is less or equal to can_accept_requests_load_factor.
+        void build_shards_pool();
+
+        const std::vector<double>& get_loads() const noexcept {
+            return _loads;
+        }
+    };
 
     static constexpr cql_protocol_version_type current_version = cql_serialization_format::latest_version;
-    static const load_balancer_clock::duration load_balancer_period;
-
-    ///
-    /// Coordinator load balancing thresholds. Note that our "load" counters are inverted thus thresholds below and the
-    /// corresponding logic are inverted too.
-    ///
-
-    // Load level above which the local shard will start offloading requests to remote nodes
-    static constexpr double start_offload_threshold = 0.25; // corresponds to the load of 75%
-    // The ratio of the "destination" shard load compared to the local shard load which allows offloading requests to it (see cql_server::build_shards_pool() description)
-    static constexpr double can_accept_requests_load_factor = 1.25;
 
     std::vector<server_socket> _listeners;
     distributed<service::storage_proxy>& _proxy;
@@ -131,10 +165,7 @@ private:
     uint64_t _unpaged_queries = 0;
     uint64_t _requests_serving = 0;
     uint64_t _requests_blocked_memory = 0;
-    cql_load_balance _lb;
-    std::vector<unsigned> _shards_pool;
-    seastar::gate _load_balance_timer_gate;
-    timer<load_balancer_clock> _load_balance_timer;
+    load_balancer _lbalancer;
     auth::service& _auth_service;
 
 public:
@@ -176,7 +207,6 @@ private:
         cql_serialization_format _cql_serialization_format = cql_serialization_format::latest();
         service::client_state _client_state;
         std::unordered_map<uint16_t, cql_query_state> _query_states;
-        unsigned _request_cpu_idx = 0;
 
         enum class tracing_request_type : uint8_t {
             not_requested,
@@ -268,15 +298,6 @@ private:
             _all_connections_stopped.set_value();
         }
     }
-
-
-    /// \brief Build the pool of shards to offload requests processing to.
-    ///
-    /// - Offload the work only if the local shard is loaded above or equal to start_offload_threshold.
-    /// - Don't offload to the remote shard if:
-    ///   - Its load is above or equal the start_offload_threshold (namely the remote shard offloads work by itself) or
-    ///   - When the "remote shard load"/"local shard load" ratio is less or equal to can_accept_requests_load_factor.
-    void build_shards_pool();
 };
 
 class cql_server::event_notifier : public service::migration_listener,
