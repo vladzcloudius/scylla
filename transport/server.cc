@@ -823,7 +823,6 @@ void cql_server::load_balancer::collect_loads() {
                     new_loads[c] = load;
                 });
             }).then([this, &new_loads] {
-                // TODO: Do we still need this? We may fill "loads" directly now.
                 std::exchange(_state->loads, std::move(new_loads));
                 _state->build_pools();
             });
@@ -834,6 +833,7 @@ void cql_server::load_balancer::collect_loads() {
 }
 
 // TODO: move the small operations into helper methods
+// TODO: make sure the original state is preserved if some of the allocations below fails
 void cql_server::load_balancer::balancing_state::build_pools() {
 
     // FIXME: optimize by keeping a set of all current receivers and senders
@@ -851,16 +851,16 @@ void cql_server::load_balancer::balancing_state::build_pools() {
         }
     }
 
-    // First remove all loaders that are not loaded anymore...
+    // First remove one most loaded receiver from the loaders that are not loaded anymore...
     std::vector<bool> loaders_reduced(loaders.size(), false);
+
     for (int i = 0; i < receivers.size(); ++i) {
-        if (loads[i] > start_offload_threshold) {
-            std::unordered_set<unsigned>& shard_i_receivers = receivers[i];
-            std::for_each(shard_i_receivers.begin(), shard_i_receivers.end(), [this, i, &loaders_reduced] (unsigned receiver_idx) {
-                loaders[receiver_idx].erase(i);
-                loaders_reduced[receiver_idx] = true;
-            });
-            shard_i_receivers.clear();
+        std::unordered_set<unsigned>& shard_i_receivers = receivers[i];
+        if (!shard_i_receivers.empty() && loads[i] > start_offload_threshold) {
+            auto max_it = std::max_element(shard_i_receivers.begin(), shard_i_receivers.end(), [this] (unsigned a, unsigned b) { return loads[a] > loads[b]; });
+            loaders[*max_it].erase(i);
+            loaders_reduced[*max_it] = true;
+            shard_i_receivers.erase(max_it);
         }
     }
 
@@ -881,31 +881,37 @@ void cql_server::load_balancer::balancing_state::build_pools() {
     std::vector<bool> loaders_added(loaders.size(), false);
     int num_of_new_receivers = 0;
     auto max_receivers_size = loads.size() - potential_senders.size();
+    int cur_num_added_receivers;
 
-    // FIXME: First offload from the most loaded shard
-    // ...now add one more loader if there are candidates
-    for (unsigned i : potential_senders) {
-        // If we added a new loader to all available receiver we won't be able to add any more - we can end here.
-        if (num_of_new_receivers >= max_receivers_size) {
-            break;
-        }
+    do {
+        cur_num_added_receivers = 0;
+        // FIXME: First offload from the most loaded shard
+        // ...now add one more loader if there are candidates
+        for (unsigned i : potential_senders) {
+            // If we added a new loader to all available receiver we won't be able to add any more - we can end here.
+            if (num_of_new_receivers >= max_receivers_size) {
+                break;
+            }
 
-        double sender_load = loads[i];
-        if (receivers[i].size() < max_receivers_size) {
-            for (int k = 0; k < loads.size(); ++k) {
-                if (i == k) {
-                    continue;
-                }
+            double sender_load = loads[i];
+            if (receivers[i].size() < max_receivers_size) {
+                for (int k = 0; k < loads.size(); ++k) {
+                    if (i == k) {
+                        continue;
+                    }
 
-                if (!loaders_added[k] && sender_load * can_accept_requests_load_factor < loads[k] && !loaders[k].count(i) && can_accept_more_load(k)) {
-                    loaders_added[k] = true;
-                    ++num_of_new_receivers;
-                    receivers[i].insert(k);
-                    loaders[k].insert(i);
+                    if (!loaders_added[k] && sender_load * can_accept_requests_load_factor < loads[k] && !loaders[k].count(i) && can_accept_more_load(k)) {
+                        loaders_added[k] = true;
+                        ++num_of_new_receivers;
+                        ++cur_num_added_receivers;
+                        receivers[i].insert(k);
+                        loaders[k].insert(i);
+                        break;
+                    }
                 }
             }
         }
-    }
+    } while (cur_num_added_receivers);
 }
 
 void cql_server::load_balancer::build_shards_pool() {
