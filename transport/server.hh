@@ -104,27 +104,55 @@ private:
     class event_notifier;
 
     class load_balancer {
+    private:
         ///
         /// Coordinator load balancing thresholds. Note that our "load" counters are inverted thus thresholds below and the
         /// corresponding logic are inverted too.
         ///
 
-        // Load level above which the local shard will start offloading requests to remote nodes
-        static constexpr double start_offload_threshold = 0.25; // corresponds to the load of 75%
-        // The ratio of the "destination" shard load compared to the local shard load which allows offloading requests to it (see cql_server::build_shards_pool() description)
-        static constexpr double can_accept_requests_load_factor = 1.25;
-
         using load_balancer_clock = lowres_clock;
         static const load_balancer_clock::duration load_balancer_period;
 
+        struct balancing_state {
+            // Load level above which the local shard will start offloading requests to remote nodes
+            static constexpr double start_offload_threshold = 0.25; // corresponds to the load of 75%
+            // Load when we want to start removing senders from the shard's pool.
+            static constexpr double start_backoff_threshold = 0.05; // corresponds to the load of 95%
+            // The ratio of the "destination" shard load compared to the local shard load which allows offloading requests to it (see cql_server::build_shards_pool() description)
+            static constexpr double can_accept_requests_load_factor = 1.25;
+
+            std::vector<double> loads;
+            std::vector<std::unordered_set<unsigned>> loaders;
+            std::vector<std::unordered_set<unsigned>> receivers;
+
+            balancing_state()
+                : loads(smp::count, 1.0)
+                , loaders(smp::count)
+                , receivers(smp::count)
+            {}
+
+            void build_pools();
+            bool can_accept_more_load(unsigned idx) {
+                return loads[idx] > start_offload_threshold || (!loaders[idx].empty() && loads[idx] > start_backoff_threshold);
+            }
+            std::vector<unsigned> get_pool(unsigned idx) const {
+                auto& receivers_idx = receivers[idx];
+                std::vector<unsigned> shards_pool(receivers_idx.size() + 1);
+                shards_pool.clear();
+                std::copy(receivers_idx.begin(), receivers_idx.end(), std::back_inserter(shards_pool));
+                shards_pool.push_back(idx);
+                return shards_pool;
+            }
+        };
+
     private:
         cql_load_balance _lb;
+        stdx::optional<balancing_state> _state; // is initialized only on shard0
         std::vector<unsigned> _shards_pool;
-        std::vector<double> _loads;
-        gate _loads_collector_timer_gate;
-        timer<load_balancer_clock> _loads_collector_timer;
-        gate _load_balance_timer_gate;
-        timer<load_balancer_clock> _load_balance_timer;
+        gate _loads_collector_timer_gate; // FIXME: rename
+        timer<load_balancer_clock> _loads_collector_timer; // FIXME: rename
+        gate _load_balance_timer_gate; // FIXME: rename
+        timer<load_balancer_clock> _load_balance_timer; // FIXME: rename
         unsigned _request_cpu_idx = 0;
 
     public:
@@ -144,8 +172,8 @@ private:
         ///   - When the "remote shard load"/"local shard load" ratio is less or equal to can_accept_requests_load_factor.
         void build_shards_pool();
 
-        const std::vector<double>& get_loads() const noexcept {
-            return _loads;
+        std::vector<unsigned> get_pool(unsigned idx) const {
+            return _state->get_pool(idx);
         }
     };
 
