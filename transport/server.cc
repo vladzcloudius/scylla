@@ -795,10 +795,7 @@ cql_server::load_balancer::load_balancer(cql_load_balance lb)
     if (_lb != cql_load_balance::none) {
         // Start loads collector on shard0 - the rest of the shards are going to read them from shard0.
         if (engine().cpu_id() == 0) {
-            // Pre-fill the _loads with "all shards are idle" values.
-            _loads.reserve(smp::count);
-            std::fill(_loads.begin(), _loads.end(), 1.0);
-
+            _state = balancing_state();
             _loads_collector_timer.arm(load_balancer_period);
         }
 
@@ -819,7 +816,9 @@ void cql_server::load_balancer::collect_loads() {
                     new_loads[c] = load;
                 });
             }).then([this, &new_loads] {
-                std::exchange(_loads, std::move(new_loads));
+                // TODO: Do we still need this? We may fill "loads" directly now.
+                std::exchange(_state->loads, std::move(new_loads));
+                _state->build_pools();
             });
         }).finally([this] {
             _loads_collector_timer.arm(load_balancer_period);
@@ -827,41 +826,88 @@ void cql_server::load_balancer::collect_loads() {
     });
 }
 
-void cql_server::load_balancer::build_shards_pool() {
-    with_gate(_load_balance_timer_gate, [this] {
-        return do_with(std::vector<unsigned>(), [this] (std::vector<unsigned>& new_shards_pool) {
-            new_shards_pool.reserve(smp::count);
+// TODO: move the small operations into helper methods
+void cql_server::load_balancer::balancing_state::build_pools() {
 
-            // First, put the "local" shard entry.
-            new_shards_pool.emplace_back(engine().cpu_id());
+    // FIXME: optimize by keeping a set of all current receivers and senders
 
-            // If the current shard is loaded less than start_offload_threshold then there's nothing to balance - end here.
-            double local_load = engine().get_load();
-            if (local_load > start_offload_threshold) {
-                std::exchange(_shards_pool, std::move(new_shards_pool));
-                return make_ready_future<>();
+    // Remember all potential senders: loaded above start_offload_threshold and not receivers.
+    // We want to learn them here in order to prevent the receivers from turning into senders
+    // in the same balancing period. We don't want this because the receivers may have a high load
+    // because they were receivers.
+    std::vector<unsigned> potential_senders;
+    potential_senders.reserve(loads.size());
+
+    for (int i = 0; i < loads.size(); ++i) {
+        if (loads[i] <=  start_offload_threshold && loaders[i].empty()) {
+            potential_senders.push_back(i);
+        }
+    }
+
+    // First remove all loaders that are not loaded anymore...
+    std::vector<bool> loaders_reduced(loaders.size(), false);
+    for (int i = 0; i < receivers.size(); ++i) {
+        if (loads[i] > start_offload_threshold) {
+            std::unordered_set<unsigned>& shard_i_receivers = receivers[i];
+            std::for_each(shard_i_receivers.begin(), shard_i_receivers.end(), [this, i, &loaders_reduced] (unsigned receiver_idx) {
+                loaders[receiver_idx].erase(i);
+                loaders_reduced[receiver_idx] = true;
+            });
+            shard_i_receivers.clear();
+        }
+    }
+
+    // ...then back off one least loaded loader for overloaded receiver shards
+    for (int i = 0; i < loaders.size(); ++i) {
+        std::unordered_set<unsigned>& shard_i_loaders = loaders[i];
+
+        if (!shard_i_loaders.empty() && loads[i] <= start_backoff_threshold) {
+            // don't remove if we already removed before
+            if (!loaders_reduced[i]) {
+                auto min_it = std::min_element(shard_i_loaders.begin(), shard_i_loaders.end(), [this] (unsigned a, unsigned b) { return loads[a] > loads[b]; });
+                receivers[*min_it].erase(i);
+                shard_i_loaders.erase(min_it);
             }
+        }
+    }
 
-            // get the "loads" vector from shard0
-            return smp::submit_to(0, [] {
-                return service::get_local_storage_service().get_local_cql_server()._lbalancer.get_loads();
-            }).then([&new_shards_pool, local_load, this](std::vector<double> loads) {
-                for (int i = 0; i < loads.size(); ++i) {
-                    // Skip the local shard.
-                    if (i == engine().cpu_id()) {
-                        continue;
-                    }
+    std::vector<bool> loaders_added(loaders.size(), false);
+    int num_of_new_receivers = 0;
+    auto max_receivers_size = loads.size() - potential_senders.size();
 
-                    double shard_i_load = loads[i];
-                    // Use the remote shard only if its load is below start_offload_threshold (don't offload to the shard that offloades by itself)
-                    // and if its load is lower than the load of the local shard by at least can_accept_requests_load_factor.
-                    if (shard_i_load > start_offload_threshold && shard_i_load > local_load * can_accept_requests_load_factor) {
-                        new_shards_pool.emplace_back(i);
-                    }
+    // FIXME: First offload from the most loaded shard
+    // ...now add one more loader if there are candidates
+    for (unsigned i : potential_senders) {
+        // If we added a new loader to all available receiver we won't be able to add any more - we can end here.
+        if (num_of_new_receivers >= max_receivers_size) {
+            break;
+        }
+
+        double sender_load = loads[i];
+        if (receivers[i].size() < max_receivers_size) {
+            for (int k = 0; k < loads.size(); ++k) {
+                if (i == k) {
+                    continue;
                 }
 
-                std::exchange(_shards_pool, std::move(new_shards_pool));
-            });
+                if (!loaders_added[k] && sender_load * can_accept_requests_load_factor < loads[k] && !loaders[k].count(i) && can_accept_more_load(k)) {
+                    loaders_added[k] = true;
+                    ++num_of_new_receivers;
+                    receivers[i].insert(k);
+                    loaders[k].insert(i);
+                }
+            }
+        }
+    }
+}
+
+void cql_server::load_balancer::build_shards_pool() {
+    with_gate(_load_balance_timer_gate, [this] {
+        // get the "loads" vector from shard0
+        return smp::submit_to(0, [idx = engine().cpu_id()] {
+            return service::get_local_storage_service().get_local_cql_server()._lbalancer.get_pool(idx);
+        }).then([this] (std::vector<unsigned> new_shards_pool) {
+            std::exchange(_shards_pool, std::move(new_shards_pool));
         }).finally([this] {
             _load_balance_timer.arm(load_balancer_period);
         });
