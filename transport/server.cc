@@ -803,6 +803,13 @@ cql_server::load_balancer::load_balancer(cql_load_balance lb)
         _shards_pool.emplace_back(engine().cpu_id());
         _load_balance_timer.arm(load_balancer_period);
     }
+
+    namespace sm = seastar::metrics;
+    _metrics.add_group("load_balancer", {
+            sm::make_gauge("shards_pool_size", [this] { return _shards_pool.size(); },
+                           sm::description("Holds a current number of elements in the shards pool.")),
+    });
+
 }
 
 void cql_server::load_balancer::collect_loads() {
