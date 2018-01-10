@@ -154,6 +154,7 @@ private:
         gate _load_balance_timer_gate; // FIXME: rename
         timer<load_balancer_clock> _load_balance_timer; // FIXME: rename
         unsigned _request_cpu_idx = 0;
+        seastar::metrics::metric_groups _metrics;
 
     public:
         load_balancer(cql_load_balance lb);
