@@ -832,7 +832,7 @@ void cql_server::load_balancer::balancing_state::build_pools() {
 
     for (int i = 0; i < receivers.size(); ++i) {
         std::unordered_set<unsigned>& shard_i_receivers = receivers[i];
-        if (!shard_i_receivers.empty() && loads[i] > start_offload_threshold) {
+        if (!shard_i_receivers.empty() && loads[i] > (start_offload_threshold * double(shard_i_receivers.size()) + 1) / double(shard_i_receivers.size() + 1)) {
             auto max_it = std::max_element(shard_i_receivers.begin(), shard_i_receivers.end(), [this] (unsigned a, unsigned b) { return loads[a] > loads[b]; });
             loaders[*max_it].erase(i);
             loaders_reduced[*max_it] = true;
@@ -865,38 +865,28 @@ void cql_server::load_balancer::balancing_state::build_pools() {
 
     int num_of_new_receivers = 0;
     auto max_receivers_size = loads.size() - potential_senders.size();
-    int cur_num_added_receivers;
 
-    // ...now add one more loader to each receiver if there are candidates
-    do {
-        cur_num_added_receivers = 0;
-        for (auto it = potential_senders.begin(); it != potential_senders.end();) {
-            unsigned i = *it;
+    // ...now add one more loader to each receiver if there are candidates and at most one receiver to each loader
+    for (unsigned i : potential_senders) {
+        // If we added a new loader to all available receiver we won't be able to add any more - we can end here.
+        if (potential_receivers.empty()) {
+            break;
+        }
 
-            // If we added a new loader to all available receiver we won't be able to add any more - we can end here.
-            if (num_of_new_receivers >= max_receivers_size) {
-                break;
-            }
-
-            double sender_load = loads[i];
-            if (receivers[i].size() < max_receivers_size) {
-                for (unsigned k : potential_receivers) {
-                    if (sender_load * can_accept_requests_load_factor < loads[k] && !loaders[k].count(i)) {
-                        potential_receivers.erase(k);
-                        ++num_of_new_receivers;
-                        ++cur_num_added_receivers;
-                        receivers[i].insert(k);
-                        loaders[k].insert(i);
-                        break;
-                    }
+        double sender_load = loads[i];
+        // Don't try to find new receivers to the sender who already sends to all possible receivers.
+        if (receivers[i].size() < max_receivers_size) {
+            for (unsigned k : potential_receivers) {
+                if (!loaders[k].count(i) && sender_load < can_accept_requests_load_factor * (loads[k] - 1) + 1) {
+                    potential_receivers.erase(k);
+                    ++num_of_new_receivers;
+                    receivers[i].insert(k);
+                    loaders[k].insert(i);
+                    break;
                 }
-                ++it;
-            } else {
-                // if this sender is full - stop checking it
-                it = potential_senders.erase(it);
             }
         }
-    } while (cur_num_added_receivers);
+    }
 }
 
 void cql_server::load_balancer::build_shards_pool() {
