@@ -788,19 +788,20 @@ unsigned cql_server::load_balancer::pick_request_cpu() noexcept {
 }
 
 cql_server::load_balancer::load_balancer(cql_load_balance lb)
-    : _lb(lb)
+    : _lb((smp::count > 1) ? lb : cql_load_balance::none)
     , _loads_collector_timer([this] { collect_loads(); })
     , _load_balance_timer([this] { build_shards_pool(); })
 {
     if (_lb != cql_load_balance::none) {
-        // Start loads collector on shard0 - the rest of the shards are going to read them from shard0.
-        if (engine().cpu_id() == 0) {
+        // First entry should always be a local shard index.
+        _shards_pool.emplace_back(engine().cpu_id());
+
+        // Start loads collector on a compute shard - the rest of the shards are going to read them from it.
+        if (engine().cpu_id() == compute_shard_id) {
             _state = balancing_state();
             _loads_collector_timer.arm(load_balancer_period);
         }
 
-        // First entry should always be a local shard index.
-        _shards_pool.emplace_back(engine().cpu_id());
         _load_balance_timer.arm(load_balancer_period);
     }
 
@@ -916,7 +917,7 @@ void cql_server::load_balancer::balancing_state::build_pools() {
 void cql_server::load_balancer::build_shards_pool() {
     with_gate(_load_balance_timer_gate, [this] {
         // get the "loads" vector from shard0
-        return smp::submit_to(0, [idx = engine().cpu_id()] {
+        return smp::submit_to(compute_shard_id, [idx = engine().cpu_id()] {
             return service::get_local_storage_service().get_local_cql_server()._lbalancer.get_pool(idx);
         }).then([this] (std::vector<unsigned> new_shards_pool) {
             std::exchange(_shards_pool, std::move(new_shards_pool));

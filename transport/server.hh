@@ -112,6 +112,7 @@ private:
 
         using load_balancer_clock = lowres_clock;
         static const load_balancer_clock::duration load_balancer_period;
+        static constexpr unsigned compute_shard_id = 1;
 
         struct balancing_state {
             // Load level above which the local shard will start offloading requests to remote nodes
