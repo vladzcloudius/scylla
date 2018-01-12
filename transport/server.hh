@@ -112,6 +112,7 @@ private:
 
         using load_balancer_clock = lowres_clock;
         static const load_balancer_clock::duration load_balancer_period;
+        static constexpr unsigned compute_shard_id = 1;
 
         struct balancing_state {
             // Load level above which the local shard will start offloading requests to remote nodes
@@ -146,6 +147,7 @@ private:
         };
 
     private:
+        distributed<cql_server>& _cql_server;
         cql_load_balance _lb;
         stdx::optional<balancing_state> _state; // is initialized only on shard0
         std::vector<unsigned> _shards_pool;
@@ -157,7 +159,7 @@ private:
         seastar::metrics::metric_groups _metrics;
 
     public:
-        load_balancer(cql_load_balance lb);
+        load_balancer(distributed<cql_server>& cql_server, cql_load_balance lb);
         future<> stop();
         unsigned pick_request_cpu() noexcept;
 
@@ -181,6 +183,7 @@ private:
     static constexpr cql_protocol_version_type current_version = cql_serialization_format::latest_version;
 
     std::vector<server_socket> _listeners;
+    distributed<cql_server>& _parent;
     distributed<service::storage_proxy>& _proxy;
     distributed<cql3::query_processor>& _query_processor;
     size_t _max_request_size;
@@ -198,7 +201,7 @@ private:
     auth::service& _auth_service;
 
 public:
-    cql_server(distributed<service::storage_proxy>& proxy, distributed<cql3::query_processor>& qp, cql_load_balance lb, auth::service&);
+    cql_server(distributed<cql_server>& parent, distributed<service::storage_proxy>& proxy, distributed<cql3::query_processor>& qp, cql_load_balance lb, auth::service&);
     future<> listen(ipv4_addr addr, std::shared_ptr<seastar::tls::credentials_builder> = {}, bool keepalive = false);
     future<> do_accepts(int which, bool keepalive, ipv4_addr server_addr);
     future<> stop();
