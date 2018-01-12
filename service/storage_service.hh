@@ -168,11 +168,6 @@ public:
         return _db;
     }
 
-    cql_transport::cql_server& get_local_cql_server() const {
-        assert(_cql_server);
-        return _cql_server->local();
-    }
-
 private:
     bool is_auto_bootstrap();
     inet_address get_broadcast_address() const {

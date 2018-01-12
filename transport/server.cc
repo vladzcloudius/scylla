@@ -262,13 +262,14 @@ private:
     }
 };
 
-cql_server::cql_server(distributed<service::storage_proxy>& proxy, distributed<cql3::query_processor>& qp, cql_load_balance lb, auth::service& auth_service)
-    : _proxy(proxy)
+cql_server::cql_server(distributed<cql_server>& parent, distributed<service::storage_proxy>& proxy, distributed<cql3::query_processor>& qp, cql_load_balance lb, auth::service& auth_service)
+    : _parent(parent)
+    , _proxy(proxy)
     , _query_processor(qp)
     , _max_request_size(memory::stats().total_memory() / 10)
     , _memory_available(_max_request_size)
     , _notifier(std::make_unique<event_notifier>())
-    , _lbalancer(lb)
+    , _lbalancer(_parent, lb)
     , _auth_service(auth_service)
 {
     namespace sm = seastar::metrics;
@@ -787,20 +788,22 @@ unsigned cql_server::load_balancer::pick_request_cpu() noexcept {
     return engine().cpu_id();
 }
 
-cql_server::load_balancer::load_balancer(cql_load_balance lb)
-    : _lb(lb)
+cql_server::load_balancer::load_balancer(distributed<cql_server>& cql_server, cql_load_balance lb)
+    : _cql_server(cql_server)
+    , _lb((smp::count > 1) ? lb : cql_load_balance::none)
     , _loads_collector_timer([this] { collect_loads(); })
     , _load_balance_timer([this] { build_shards_pool(); })
 {
     if (_lb != cql_load_balance::none) {
-        // Start loads collector on shard0 - the rest of the shards are going to read them from shard0.
-        if (engine().cpu_id() == 0) {
+        // First entry should always be a local shard index.
+        _shards_pool.emplace_back(engine().cpu_id());
+
+        // Start loads collector on a compute shard - the rest of the shards are going to read them from it.
+        if (engine().cpu_id() == compute_shard_id) {
             _state = balancing_state();
             _loads_collector_timer.arm(load_balancer_period);
         }
 
-        // First entry should always be a local shard index.
-        _shards_pool.emplace_back(engine().cpu_id());
         _load_balance_timer.arm(load_balancer_period);
     }
 
@@ -814,18 +817,11 @@ cql_server::load_balancer::load_balancer(cql_load_balance lb)
 
 void cql_server::load_balancer::collect_loads() {
     with_gate(_loads_collector_timer_gate, [this] {
-        return do_with(std::vector<double>(smp::count), [this] (std::vector<double>& new_loads) {
-            // TODO: If only we had a map() method outside the "sharded" class...
-            return parallel_for_each(boost::irange<unsigned>(0, smp::count), [&new_loads](unsigned c) {
-                return smp::submit_to(c, [] {
-                    return engine().get_load();
-                }).then([&new_loads, c](double load) {
-                    new_loads[c] = load;
-                });
-            }).then([this, &new_loads] {
-                std::exchange(_state->loads, std::move(new_loads));
-                _state->build_pools();
-            });
+        return _cql_server.map([] (cql_server& s) {
+            return engine().get_load();
+        }).then([this] (std::vector<double> new_loads) {
+            std::exchange(_state->loads, std::move(new_loads));
+            _state->build_pools();
         }).finally([this] {
             _loads_collector_timer.arm(load_balancer_period);
         });
@@ -916,8 +912,8 @@ void cql_server::load_balancer::balancing_state::build_pools() {
 void cql_server::load_balancer::build_shards_pool() {
     with_gate(_load_balance_timer_gate, [this] {
         // get the "loads" vector from shard0
-        return smp::submit_to(0, [idx = engine().cpu_id()] {
-            return service::get_local_storage_service().get_local_cql_server()._lbalancer.get_pool(idx);
+        return _cql_server.invoke_on(compute_shard_id, [idx = engine().cpu_id()] (cql_server& s) {
+            return s._lbalancer.get_pool(idx);
         }).then([this] (std::vector<unsigned> new_shards_pool) {
             std::exchange(_shards_pool, std::move(new_shards_pool));
         }).finally([this] {
