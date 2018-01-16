@@ -140,8 +140,8 @@ private:
                 auto& receivers_idx = receivers[idx];
                 std::vector<unsigned> shards_pool(receivers_idx.size() + 1);
                 shards_pool.clear();
-                std::copy(receivers_idx.begin(), receivers_idx.end(), std::back_inserter(shards_pool));
                 shards_pool.push_back(idx);
+                std::copy(receivers_idx.begin(), receivers_idx.end(), std::back_inserter(shards_pool));
                 return shards_pool;
             }
         };
@@ -151,6 +151,7 @@ private:
         cql_load_balance _lb;
         stdx::optional<balancing_state> _state; // is initialized only on shard0
         std::vector<unsigned> _shards_pool;
+        std::vector<size_t> _receivers_queue_len;
         gate _loads_collector_timer_gate; // FIXME: rename
         timer<load_balancer_clock> _loads_collector_timer; // FIXME: rename
         gate _load_balance_timer_gate; // FIXME: rename
@@ -162,6 +163,7 @@ private:
         load_balancer(distributed<cql_server>& cql_server, cql_load_balance lb);
         future<> stop();
         unsigned pick_request_cpu() noexcept;
+        void complete_request_handling(unsigned id) noexcept;
 
     private:
         /// \brief Collect _load values from all shards. Runs on shard0 only.
@@ -256,6 +258,7 @@ private:
         future<processing_result> process_request_one(bytes_view buf, uint8_t op, uint16_t stream, service::client_state client_state, tracing_request_type tracing_request);
         unsigned frame_size() const;
         unsigned pick_request_cpu();
+        void complete_cpu_request_handling(unsigned id) noexcept;
         void update_client_state(processing_result& r);
         cql_binary_frame_v3 parse_frame(temporary_buffer<char> buf);
         future<temporary_buffer<char>> read_and_decompress_frame(size_t length, uint8_t flags);
