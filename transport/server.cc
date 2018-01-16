@@ -698,7 +698,7 @@ future<> cql_server::connection::process_request() {
 
             with_gate(_pending_requests_gate, [this, flags, op, stream, buf = std::move(buf), tracing_requested, mem_permit = std::move(mem_permit)] () mutable {
                 auto bv = bytes_view{reinterpret_cast<const int8_t*>(buf.begin()), buf.size()};
-                auto cpu = pick_request_cpu();
+                auto cpu = pick_request_cpu(buf.size());
                 return [&] {
                     if (cpu == engine().cpu_id()) {
                         return process_request_stage(this, bv, op, stream, service::client_state(service::client_state::request_copy_tag{}, _client_state, _client_state.get_timestamp()), tracing_requested);
@@ -712,7 +712,7 @@ future<> cql_server::connection::process_request() {
                     return this->write_response(std::move(response.cql_response), _compression);
                 }).finally([this, buf = std::move(buf), mem_permit = std::move(mem_permit), cpu] {
                     // Keep buf alive.
-                    complete_cpu_request_handling(cpu);
+                    complete_cpu_request_handling(cpu, buf.size());
                 });
             }).handle_exception([] (std::exception_ptr ex) {
                 clogger.error("request processing failed: {}", ex);
@@ -778,15 +778,15 @@ future<temporary_buffer<char>> cql_server::connection::read_and_decompress_frame
     return _read_buf.read_exactly(length);
 }
 
-unsigned cql_server::connection::pick_request_cpu() {
-    return _server._lbalancer.pick_request_cpu();
+unsigned cql_server::connection::pick_request_cpu(size_t req_len) {
+    return _server._lbalancer.pick_request_cpu(req_len);
 }
 
-void cql_server::connection::complete_cpu_request_handling(unsigned id) noexcept {
-    return _server._lbalancer.complete_request_handling(id);
+void cql_server::connection::complete_cpu_request_handling(unsigned id, size_t req_len) noexcept {
+    return _server._lbalancer.complete_request_handling(id, req_len);
 }
 
-unsigned cql_server::load_balancer::pick_request_cpu() noexcept {
+unsigned cql_server::load_balancer::pick_request_cpu(size_t req_len) noexcept {
     if (_lb != cql_load_balance::none) {
         unsigned id;
 
@@ -800,16 +800,16 @@ unsigned cql_server::load_balancer::pick_request_cpu() noexcept {
             id = engine().cpu_id();
         }
 
-        ++_receivers_queue_len[id];
+        _receivers_queue_len[id] += req_len;
         return id;
     }
 
     return engine().cpu_id();
 }
 
-void cql_server::load_balancer::complete_request_handling(unsigned id) noexcept {
+void cql_server::load_balancer::complete_request_handling(unsigned id, size_t req_len) noexcept {
     if (_lb != cql_load_balance::none) {
-        --_receivers_queue_len[id];
+        _receivers_queue_len[id] -= req_len;
     }
 }
 
