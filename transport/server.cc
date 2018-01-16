@@ -879,6 +879,8 @@ void cql_server::load_balancer::balancing_state::build_pools() {
     class receivers_comp {
     private:
         std::vector<std::unordered_set<unsigned>>& _loaders;
+
+    public:
         receivers_comp(std::vector<std::unordered_set<unsigned>>& loaders) : _loaders(loaders) {}
         bool operator()(unsigned a, unsigned b) const noexcept {
             return _loaders[a].size() < _loaders[b].size();
