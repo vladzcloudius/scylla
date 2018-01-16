@@ -707,8 +707,9 @@ future<> cql_server::connection::process_request() {
                             return process_request_stage(this, bv, op, stream, service::client_state(service::client_state::request_copy_tag{}, client_state, ts), tracing_requested);
                         });
                     }
-                }().then([this, flags] (auto&& response) {
+                }().then([this, flags, cpu] (auto&& response) {
                     update_client_state(response);
+                    complete_cpu_request_handling(cpu);
                     return this->write_response(std::move(response.cql_response), _compression);
                 }).then([buf = std::move(buf), mem_permit = std::move(mem_permit)] {
                     // Keep buf alive.
@@ -781,16 +782,41 @@ unsigned cql_server::connection::pick_request_cpu() {
     return _server._lbalancer.pick_request_cpu();
 }
 
+void cql_server::connection::complete_cpu_request_handling(unsigned id) noexcept {
+    return _server._lbalancer.complete_request_handling(id);
+}
+
 unsigned cql_server::load_balancer::pick_request_cpu() noexcept {
-    if (_lb == cql_load_balance::round_robin && _shards_pool.size() > 1) {
-        return _shards_pool[_request_cpu_idx++ % _shards_pool.size()];
+    if (_lb != cql_load_balance::none) {
+        unsigned id;
+
+        if (_shards_pool.size() > 1) {
+            //_shards_pool[_request_cpu_idx++ % _shards_pool.size()];
+
+            // TODO: include the request size into the formula somehow
+            auto it = std::min_element(_shards_pool.begin(), _shards_pool.end(), [this] (unsigned a, unsigned b) { return _receivers_queue_len[a] < _receivers_queue_len[b]; });
+            id = *it;
+        } else {
+            id = engine().cpu_id();
+        }
+
+        ++_receivers_queue_len[id];
+        return id;
     }
+
     return engine().cpu_id();
+}
+
+void cql_server::load_balancer::complete_request_handling(unsigned id) noexcept {
+    if (_lb != cql_load_balance::none) {
+        --_receivers_queue_len[id];
+    }
 }
 
 cql_server::load_balancer::load_balancer(distributed<cql_server>& cql_server, cql_load_balance lb)
     : _cql_server(cql_server)
     , _lb((smp::count > 1) ? lb : cql_load_balance::none)
+    , _receivers_queue_len(smp::count, 0)
     , _loads_collector_timer([this] { collect_loads(); })
     , _load_balance_timer([this] { build_shards_pool(); })
 {
