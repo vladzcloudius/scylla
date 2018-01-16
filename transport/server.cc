@@ -874,14 +874,24 @@ void cql_server::load_balancer::balancing_state::build_pools() {
         }
     }
 
-    std::unordered_set<unsigned> potential_receivers;
+    // Sort the potential receivers by the number of loaders they already have. We want to distribute loaders equally among
+    // all available receivers, therefore we'll try to first populate the receivers that have the least number of loaders.
+    class receivers_comp {
+    private:
+        std::vector<std::unordered_set<unsigned>>& _loaders;
+        receivers_comp(std::vector<std::unordered_set<unsigned>>& loaders) : _loaders(loaders) {}
+        bool operator()(unsigned a, unsigned b) const noexcept {
+            return _loaders[a].size() < _loaders[b].size();
+        }
+    };
+
+    std::set<unsigned, receivers_comp> potential_receivers(receivers_comp(this->loaders));
 
     for (int i = 0; i < loads.size(); ++i) {
         if (!potential_senders.count(i) && can_accept_more_load(i)) {
             potential_receivers.insert(i);
         }
     }
-
 
     int num_of_new_receivers = 0;
     auto max_receivers_size = loads.size() - potential_senders.size();
@@ -896,9 +906,10 @@ void cql_server::load_balancer::balancing_state::build_pools() {
         double sender_load = loads[i];
         // Don't try to find new receivers to the sender who already sends to all possible receivers.
         if (receivers[i].size() < max_receivers_size) {
-            for (unsigned k : potential_receivers) {
+            for (auto it = potential_receivers.begin(); it != potential_receivers.end(); ++it) {
+                unsigned k = *it;
                 if (!loaders[k].count(i) && sender_load < can_accept_requests_load_factor * (loads[k] - 1) + 1) {
-                    potential_receivers.erase(k);
+                    potential_receivers.erase(it);
                     ++num_of_new_receivers;
                     receivers[i].insert(k);
                     loaders[k].insert(i);
