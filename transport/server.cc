@@ -707,12 +707,12 @@ future<> cql_server::connection::process_request() {
                             return process_request_stage(this, bv, op, stream, service::client_state(service::client_state::request_copy_tag{}, client_state, ts), tracing_requested);
                         });
                     }
-                }().then([this, flags, cpu] (auto&& response) {
+                }().then([this, flags] (auto&& response) {
                     update_client_state(response);
-                    complete_cpu_request_handling(cpu);
                     return this->write_response(std::move(response.cql_response), _compression);
-                }).then([buf = std::move(buf), mem_permit = std::move(mem_permit)] {
+                }).finally([this, buf = std::move(buf), mem_permit = std::move(mem_permit), cpu] {
                     // Keep buf alive.
+                    complete_cpu_request_handling(cpu);
                 });
             }).handle_exception([] (std::exception_ptr ex) {
                 clogger.error("request processing failed: {}", ex);
