@@ -162,8 +162,8 @@ private:
     public:
         load_balancer(distributed<cql_server>& cql_server, cql_load_balance lb);
         future<> stop();
-        unsigned pick_request_cpu() noexcept;
-        void complete_request_handling(unsigned id) noexcept;
+        unsigned pick_request_cpu(size_t req_len) noexcept;
+        void complete_request_handling(unsigned id, size_t req_len) noexcept;
 
     private:
         /// \brief Collect _load values from all shards. Runs on shard0 only.
@@ -257,8 +257,8 @@ private:
         friend class process_request_executor;
         future<processing_result> process_request_one(bytes_view buf, uint8_t op, uint16_t stream, service::client_state client_state, tracing_request_type tracing_request);
         unsigned frame_size() const;
-        unsigned pick_request_cpu();
-        void complete_cpu_request_handling(unsigned id) noexcept;
+        unsigned pick_request_cpu(size_t req_len);
+        void complete_cpu_request_handling(unsigned id, size_t req_len) noexcept;
         void update_client_state(processing_result& r);
         cql_binary_frame_v3 parse_frame(temporary_buffer<char> buf);
         future<temporary_buffer<char>> read_and_decompress_frame(size_t length, uint8_t flags);
