@@ -146,24 +146,42 @@ private:
             }
         };
 
+        class queue_len_comp {
+        private:
+            std::reference_wrapper<const std::vector<size_t>> _receivers_queue_len;
+
+        public:
+            queue_len_comp(const std::vector<size_t>& receivers_queue_len) : _receivers_queue_len(receivers_queue_len) {}
+            bool operator()(unsigned a, unsigned b) const noexcept {
+                return _receivers_queue_len.get()[a] < _receivers_queue_len.get()[b];
+            }
+        };
+
+        using sorted_shards_type = std::multiset<unsigned, queue_len_comp>;
+
     private:
         distributed<cql_server>& _cql_server;
         cql_load_balance _lb;
         stdx::optional<balancing_state> _state; // is initialized only on shard0
-        std::vector<unsigned> _shards_pool;
         std::vector<size_t> _receivers_queue_len;
+        sorted_shards_type _sorted_shards;
         gate _loads_collector_timer_gate; // FIXME: rename
         timer<load_balancer_clock> _loads_collector_timer; // FIXME: rename
         gate _load_balance_timer_gate; // FIXME: rename
         timer<load_balancer_clock> _load_balance_timer; // FIXME: rename
-        unsigned _request_cpu_idx = 0;
         seastar::metrics::metric_groups _metrics;
 
     public:
         load_balancer(distributed<cql_server>& cql_server, cql_load_balance lb);
         future<> stop();
-        unsigned pick_request_cpu(size_t req_len) noexcept;
-        void complete_request_handling(unsigned id, size_t req_len) noexcept;
+        unsigned pick_request_cpu(size_t budget) noexcept;
+        void complete_request_handling(unsigned id, size_t budget) noexcept;
+        sorted_shards_type::iterator get_sorted_iterator_for_id(unsigned id);
+
+        /// \brief Rebalance the element pointed by the given iterator.
+        /// \note \ref id_it is going to become invalid after the call.
+        /// \param id_it Iterator to the element to rebalance.
+        void rebalance_id(sorted_shards_type::iterator id_it);
 
     private:
         /// \brief Collect _load values from all shards. Runs on shard0 only.
@@ -257,8 +275,8 @@ private:
         friend class process_request_executor;
         future<processing_result> process_request_one(bytes_view buf, uint8_t op, uint16_t stream, service::client_state client_state, tracing_request_type tracing_request);
         unsigned frame_size() const;
-        unsigned pick_request_cpu(size_t req_len);
-        void complete_cpu_request_handling(unsigned id, size_t req_len) noexcept;
+        unsigned pick_request_cpu(size_t budget);
+        void complete_cpu_request_handling(unsigned id, size_t budget) noexcept;
         void update_client_state(processing_result& r);
         cql_binary_frame_v3 parse_frame(temporary_buffer<char> buf);
         future<temporary_buffer<char>> read_and_decompress_frame(size_t length, uint8_t flags);

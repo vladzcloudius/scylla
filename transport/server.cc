@@ -698,7 +698,7 @@ future<> cql_server::connection::process_request() {
 
             with_gate(_pending_requests_gate, [this, flags, op, stream, buf = std::move(buf), tracing_requested, mem_permit = std::move(mem_permit)] () mutable {
                 auto bv = bytes_view{reinterpret_cast<const int8_t*>(buf.begin()), buf.size()};
-                auto cpu = pick_request_cpu(buf.size());
+                auto cpu = pick_request_cpu(buf.size() + 1);
                 return [&] {
                     if (cpu == engine().cpu_id()) {
                         return process_request_stage(this, bv, op, stream, service::client_state(service::client_state::request_copy_tag{}, _client_state, _client_state.get_timestamp()), tracing_requested);
@@ -712,7 +712,7 @@ future<> cql_server::connection::process_request() {
                     return this->write_response(std::move(response.cql_response), _compression);
                 }).finally([this, buf = std::move(buf), mem_permit = std::move(mem_permit), cpu] {
                     // Keep buf alive.
-                    complete_cpu_request_handling(cpu, buf.size());
+                    complete_cpu_request_handling(cpu, buf.size() + 1);
                 });
             }).handle_exception([] (std::exception_ptr ex) {
                 clogger.error("request processing failed: {}", ex);
@@ -778,38 +778,74 @@ future<temporary_buffer<char>> cql_server::connection::read_and_decompress_frame
     return _read_buf.read_exactly(length);
 }
 
-unsigned cql_server::connection::pick_request_cpu(size_t req_len) {
-    return _server._lbalancer.pick_request_cpu(req_len);
+unsigned cql_server::connection::pick_request_cpu(size_t budget) {
+    return _server._lbalancer.pick_request_cpu(budget);
 }
 
-void cql_server::connection::complete_cpu_request_handling(unsigned id, size_t req_len) noexcept {
-    return _server._lbalancer.complete_request_handling(id, req_len);
+void cql_server::connection::complete_cpu_request_handling(unsigned id, size_t budget) noexcept {
+    return _server._lbalancer.complete_request_handling(id, budget);
 }
 
-unsigned cql_server::load_balancer::pick_request_cpu(size_t req_len) noexcept {
+unsigned cql_server::load_balancer::pick_request_cpu(size_t budget) noexcept {
     if (_lb != cql_load_balance::none) {
-        unsigned id;
+        // FIXME: remove this assert - this is a fast path!
+        assert(budget != 0);
 
-        if (_shards_pool.size() > 1) {
-            //_shards_pool[_request_cpu_idx++ % _shards_pool.size()];
+        unsigned local_shard_id = engine().cpu_id();
+        sorted_shards_type::iterator id_it;
 
-            // TODO: include the request size into the formula somehow
-            auto it = std::min_element(_shards_pool.begin(), _shards_pool.end(), [this] (unsigned a, unsigned b) { return _receivers_queue_len[a] < _receivers_queue_len[b]; });
-            id = *it;
-        } else {
-            id = engine().cpu_id();
+        id_it = _sorted_shards.begin();
+
+        if (_sorted_shards.size() > 1) {
+            // Prioritize the local shard
+            if (_receivers_queue_len[*id_it] == _receivers_queue_len[local_shard_id]) {
+                // find the iterator for the local shard
+                id_it = get_sorted_iterator_for_id(local_shard_id);
+            }
         }
 
-        _receivers_queue_len[id] += req_len;
+        unsigned id = *id_it;
+
+        // rebalance the tree
+        _receivers_queue_len[id] += budget;
+        rebalance_id(id_it);
+
         return id;
     }
 
     return engine().cpu_id();
 }
 
-void cql_server::load_balancer::complete_request_handling(unsigned id, size_t req_len) noexcept {
+cql_server::load_balancer::sorted_shards_type::iterator cql_server::load_balancer::get_sorted_iterator_for_id(unsigned id) {
+    // find the iterator for the give shard - there may be more than one elements with the same Compare(id).
+    auto eq_range = _sorted_shards.equal_range(id);
+    for (auto it = eq_range.first; it != eq_range.second; ++it) {
+        if (*it == id) {
+            return it;
+        }
+    }
+
+    return _sorted_shards.end();
+}
+
+void cql_server::load_balancer::rebalance_id(sorted_shards_type::iterator id_it) {
+    if (id_it == _sorted_shards.end()) {
+        return;
+    }
+    auto id_node = _sorted_shards.extract(id_it);
+    _sorted_shards.insert(std::move(id_node));
+}
+
+void cql_server::load_balancer::complete_request_handling(unsigned id, size_t budget) noexcept {
     if (_lb != cql_load_balance::none) {
-        _receivers_queue_len[id] -= req_len;
+        auto it = get_sorted_iterator_for_id(id);
+
+        // FIXME: remove this assert - it's a fast path!
+        assert(_receivers_queue_len[id] >= budget);
+
+        // rebalance the tree
+        _receivers_queue_len[id] -= budget;
+        rebalance_id(it);
     }
 }
 
@@ -817,12 +853,13 @@ cql_server::load_balancer::load_balancer(distributed<cql_server>& cql_server, cq
     : _cql_server(cql_server)
     , _lb((smp::count > 1) ? lb : cql_load_balance::none)
     , _receivers_queue_len(smp::count, 0)
+    , _sorted_shards(queue_len_comp(_receivers_queue_len))
     , _loads_collector_timer([this] { collect_loads(); })
     , _load_balance_timer([this] { build_shards_pool(); })
 {
     if (_lb != cql_load_balance::none) {
         // First entry should always be a local shard index.
-        _shards_pool.emplace_back(engine().cpu_id());
+        _sorted_shards.insert(engine().cpu_id());
 
         // Start loads collector on a compute shard - the rest of the shards are going to read them from it.
         if (engine().cpu_id() == compute_shard_id) {
@@ -835,7 +872,7 @@ cql_server::load_balancer::load_balancer(distributed<cql_server>& cql_server, cq
 
     namespace sm = seastar::metrics;
     _metrics.add_group("load_balancer", {
-            sm::make_gauge("shards_pool_size", [this] { return _shards_pool.size(); },
+            sm::make_gauge("shards_pool_size", [this] { return _sorted_shards.size(); },
                            sm::description("Holds a current number of elements in the shards pool.")),
     });
 
@@ -904,16 +941,16 @@ void cql_server::load_balancer::balancing_state::build_pools() {
     // all available receivers, therefore we'll try to first populate the receivers that have the least number of loaders.
     class receivers_comp {
     private:
-        std::vector<std::unordered_set<unsigned>>& _loaders;
+        std::reference_wrapper<const std::vector<std::unordered_set<unsigned>>> _loaders;
 
     public:
-        receivers_comp(std::vector<std::unordered_set<unsigned>>& loaders) : _loaders(loaders) {}
+        receivers_comp(const std::vector<std::unordered_set<unsigned>>& loaders) : _loaders(loaders) {}
         bool operator()(unsigned a, unsigned b) const noexcept {
-            return _loaders[a].size() < _loaders[b].size();
+            return _loaders.get()[a].size() < _loaders.get()[b].size();
         }
     };
 
-    std::set<unsigned, receivers_comp> potential_receivers(receivers_comp(this->loaders));
+    std::multiset<unsigned, receivers_comp> potential_receivers(receivers_comp(std::cref(loaders)));
 
     for (int i = 0; i < loads.size(); ++i) {
         if (!potential_senders.count(i) && can_accept_more_load(i)) {
@@ -954,7 +991,8 @@ void cql_server::load_balancer::build_shards_pool() {
         return _cql_server.invoke_on(compute_shard_id, [idx = engine().cpu_id()] (cql_server& s) {
             return s._lbalancer.get_pool(idx);
         }).then([this] (std::vector<unsigned> new_shards_pool) {
-            std::exchange(_shards_pool, std::move(new_shards_pool));
+            std::multiset<unsigned, queue_len_comp> new_sorted_shards(new_shards_pool.begin(), new_shards_pool.end(), queue_len_comp(_receivers_queue_len));
+            std::exchange(_sorted_shards, std::move(new_sorted_shards));
         }).finally([this] {
             _load_balance_timer.arm(load_balancer_period);
         });
