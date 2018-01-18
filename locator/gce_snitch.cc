@@ -49,8 +49,7 @@ future<> gce_snitch::load_config() {
             assert(splits.size() > 1);
 
             _my_rack = splits[splits.size() - 1];
-            _my_dc = az.substr(0, az.size() - 1);
-
+            _my_dc = az.substr(0, az.size() - 1 - _my_rack.size());
 
             return read_property_file().then([this] (sstring datacenter_suffix) {
                 _my_dc += datacenter_suffix;
