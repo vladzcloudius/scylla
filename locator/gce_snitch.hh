@@ -27,7 +27,7 @@ namespace locator {
 class gce_snitch : public production_snitch_base {
 public:
     static constexpr const char* ZONE_NAME_QUERY_REQ = "/computeMetadata/v1/instance/zone";
-    static constexpr const char* GCE_QUERY_SERVER_ADDR = "metadata.google.internal:80";
+    static constexpr const char* GCE_QUERY_SERVER_ADDR = "metadata.google.internal";
 
     gce_snitch(const sstring& fname = "", unsigned io_cpu_id = 0);
     virtual future<> start() override;

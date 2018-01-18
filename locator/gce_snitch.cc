@@ -19,6 +19,7 @@
  * Copyright (C) 2017 ScyllaDB
  */
 
+#include <seastar/net/dns.hh>
 #include "locator/gce_snitch.hh"
 
 namespace locator {
@@ -80,45 +81,47 @@ future<> gce_snitch::start() {
 }
 
 future<sstring> gce_snitch::gce_api_call(sstring addr, sstring cmd) {
-    return engine().net().connect(make_ipv4_address(ipv4_addr{addr}))
-    .then([this, addr, cmd] (connected_socket fd) {
-        _sd = std::move(fd);
-        _in = std::move(_sd.input());
-        _out = std::move(_sd.output());
-        _zone_req = sstring("GET ") + cmd +
-                    sstring(" HTTP/1.1\r\nHost: metadata\r\n") +
-                    sstring("Metadata-Flavor: Google") +
-                    sstring("\r\n\r\n");
+    return seastar::net::dns::resolve_name(addr, net::inet_address::family::INET).then([this, cmd] (net::inet_address a) {
+        return engine().net().connect(make_ipv4_address(ipv4_addr(a, 80))).then([this, cmd] (connected_socket fd) {
+            _sd = std::move(fd);
+            _in = std::move(_sd.input());
+            _out = std::move(_sd.output());
+            _zone_req = sstring("GET ") + cmd +
+                        sstring(" HTTP/1.1\r\nHost: metadata\r\n") +
+                        sstring("Metadata-Flavor: Google") +
+                        sstring("\r\n\r\n");
 
-        return _out.write(_zone_req.c_str()).then([this] {
-            return _out.flush();
-        });
-    }).then([this] {
-        _parser.init();
-        return _in.consume(_parser).then([this] {
-            if (_parser.eof()) {
-                return make_exception_future<sstring>("Bad HTTP response");
-            }
+            return _out.write(_zone_req.c_str()).then([this] {
+                return _out.flush();
+            });
+        }).then([this] {
+            _parser.init();
+            return _in.consume(_parser).then([this] {
+                if (_parser.eof()) {
+                    return make_exception_future<sstring>("Bad HTTP response");
+                }
 
-            // Read HTTP response header first
-            auto _rsp = _parser.get_parsed_response();
-            auto it = _rsp->_headers.find("Content-Length");
-            if (it == _rsp->_headers.end()) {
-                return make_exception_future<sstring>("Error: HTTP response does not contain: Content-Length\n");
-            }
+                // Read HTTP response header first
+                auto _rsp = _parser.get_parsed_response();
+                auto it = _rsp->_headers.find("Content-Length");
+                if (it == _rsp->_headers.end()) {
+                    return make_exception_future<sstring>("Error: HTTP response does not contain: Content-Length\n");
+                }
 
-            auto content_len = std::stoi(it->second);
+                auto content_len = std::stoi(it->second);
 
-            // Read HTTP response body
-            return _in.read_exactly(content_len).then([this] (temporary_buffer<char> buf) {
-                using namespace boost::algorithm;
-                sstring res(buf.get(), buf.size());
-                std::vector<std::string> splits;
-                split(splits, res, is_any_of("/"));
-                return make_ready_future<sstring>(std::move(splits[splits.size() - 1]));
+                // Read HTTP response body
+                return _in.read_exactly(content_len).then([this] (temporary_buffer<char> buf) {
+                    using namespace boost::algorithm;
+                    sstring res(buf.get(), buf.size());
+                    std::vector<std::string> splits;
+                    split(splits, res, is_any_of("/"));
+                    return make_ready_future<sstring>(std::move(splits[splits.size() - 1]));
+                });
             });
         });
     });
+
 }
 
 future<sstring> gce_snitch::read_property_file() {
