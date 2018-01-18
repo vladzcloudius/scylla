@@ -513,7 +513,6 @@ future<cql_server::connection::processing_result>
         default:                               throw exceptions::protocol_exception(sprint("Unknown opcode %d", int(cqlop)));
         }
     }).then_wrapped([this, cqlop, stream, client_state] (future<response_type> f) {
-        --_server._requests_serving;
         try {
             response_type response = f.get0();
             service::client_state& resp_client_state = response.second;
@@ -712,6 +711,7 @@ future<> cql_server::connection::process_request() {
                     return this->write_response(std::move(response.cql_response), _compression);
                 }).finally([this, buf = std::move(buf), mem_permit = std::move(mem_permit), cpu] {
                     // Keep buf alive.
+                    --_server._requests_serving;
                     complete_cpu_request_handling(cpu, buf.size() + 1);
                 });
             }).handle_exception([] (std::exception_ptr ex) {
