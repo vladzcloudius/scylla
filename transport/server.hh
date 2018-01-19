@@ -106,6 +106,7 @@ private:
     static constexpr cql_protocol_version_type current_version = cql_serialization_format::latest_version;
 
     std::vector<server_socket> _listeners;
+    distributed<cql_server>& _parent;
     distributed<service::storage_proxy>& _proxy;
     distributed<cql3::query_processor>& _query_processor;
     size_t _max_request_size;
@@ -122,7 +123,7 @@ private:
     cql_load_balance _lb;
     auth::service& _auth_service;
 public:
-    cql_server(distributed<service::storage_proxy>& proxy, distributed<cql3::query_processor>& qp, cql_load_balance lb, auth::service&);
+    cql_server(distributed<cql_server>& parent, distributed<service::storage_proxy>& proxy, distributed<cql3::query_processor>& qp, cql_load_balance lb, auth::service&);
     future<> listen(ipv4_addr addr, std::shared_ptr<seastar::tls::credentials_builder> = {}, bool keepalive = false);
     future<> do_accepts(int which, bool keepalive, ipv4_addr server_addr);
     future<> stop();
@@ -148,6 +149,7 @@ private:
             {}
         };
 
+        distributed<cql_server>& _distributed_server;
         cql_server& _server;
         ipv4_addr _server_addr;
         connected_socket _fd;
@@ -168,7 +170,7 @@ private:
             write_on_close
         };
     public:
-        connection(cql_server& server, ipv4_addr server_addr, connected_socket&& fd, socket_address addr);
+        connection(distributed<cql_server>& server, ipv4_addr server_addr, connected_socket&& fd, socket_address addr);
         ~connection();
         future<> process();
         future<> process_request();

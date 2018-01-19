@@ -260,8 +260,9 @@ private:
     }
 };
 
-cql_server::cql_server(distributed<service::storage_proxy>& proxy, distributed<cql3::query_processor>& qp, cql_load_balance lb, auth::service& auth_service)
-    : _proxy(proxy)
+cql_server::cql_server(distributed<cql_server>& parent, distributed<service::storage_proxy>& proxy, distributed<cql3::query_processor>& qp, cql_load_balance lb, auth::service& auth_service)
+    : _parent(parent)
+    , _proxy(proxy)
     , _query_processor(qp)
     , _max_request_size(memory::stats().total_memory() / 10)
     , _memory_available(_max_request_size)
@@ -352,7 +353,7 @@ cql_server::do_accepts(int which, bool keepalive, ipv4_addr server_addr) {
         auto addr = std::get<1>(std::move(cs_sa));
         fd.set_nodelay(true);
         fd.set_keepalive(keepalive);
-        auto conn = make_shared<connection>(*this, server_addr, std::move(fd), std::move(addr));
+        auto conn = ::make_shared<connection>(std::ref(_parent), server_addr, std::move(fd), std::move(addr));
         ++_connects;
         ++_connections;
         conn->process().then_wrapped([this, conn] (future<> f) {
@@ -562,13 +563,14 @@ future<cql_server::connection::processing_result>
     });
 }
 
-cql_server::connection::connection(cql_server& server, ipv4_addr server_addr, connected_socket&& fd, socket_address addr)
-    : _server(server)
+cql_server::connection::connection(distributed<cql_server>& dist_server, ipv4_addr server_addr, connected_socket&& fd, socket_address addr)
+    : _distributed_server(dist_server)
+    , _server(_distributed_server.local())
     , _server_addr(server_addr)
     , _fd(std::move(fd))
     , _read_buf(_fd.input())
     , _write_buf(_fd.output())
-    , _client_state(service::client_state::external_tag{}, server._auth_service, addr)
+    , _client_state(service::client_state::external_tag{}, _server._auth_service, addr)
 {
     ++_server._total_connections;
     ++_server._current_connections;
@@ -695,10 +697,10 @@ future<> cql_server::connection::process_request() {
                 auto cpu = pick_request_cpu();
                 return [&] {
                     if (cpu == engine().cpu_id()) {
-                        return process_request_stage(this, bv, op, stream, service::client_state(service::client_state::request_copy_tag{}, _client_state, _client_state.get_timestamp()), tracing_requested);
+                        return process_request_stage(this, bv, op, stream, service::client_state(service::client_state::request_copy_tag{}, _client_state, _client_state.get_timestamp(), &_server), tracing_requested);
                     } else {
                         return smp::submit_to(cpu, [this, bv = std::move(bv), op, stream, client_state = _client_state, tracing_requested, ts = _client_state.get_timestamp()] () mutable {
-                            return process_request_stage(this, bv, op, stream, service::client_state(service::client_state::request_copy_tag{}, client_state, ts), tracing_requested);
+                            return process_request_stage(this, bv, op, stream, service::client_state(service::client_state::request_copy_tag{}, client_state, ts, &_distributed_server.local()), tracing_requested);
                         });
                     }
                 }().then([this, flags] (auto&& response) {
@@ -841,7 +843,7 @@ future<response_type> cql_server::connection::process_query(uint16_t stream, byt
 
     // Count the number of unpaged queries
     if (options.get_page_size() <= 0) {
-        _server._unpaged_queries += 1;
+        ++query_state.get_client_state().local_cql_server()._unpaged_queries;
     }
 
     tracing::set_page_size(query_state.get_trace_state(), options.get_page_size());

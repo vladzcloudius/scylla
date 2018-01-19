@@ -53,6 +53,10 @@
 #include "tracing/tracing.hh"
 #include "tracing/trace_state.hh"
 
+namespace cql_transport {
+class cql_server;
+}
+
 namespace service {
 
 /**
@@ -116,6 +120,7 @@ private:
 
     // Only set for "request copy"
     stdx::optional<api::timestamp_type> _request_ts;
+    cql_transport::cql_server* _local_cql_server_ptr = nullptr;
 
 public:
     struct internal_tag {};
@@ -153,7 +158,7 @@ public:
     /// \param request_copy_tag
     /// \param orig The client_state that should be copied.
     /// \param ts A timestamp to use during the request handling
-    client_state(request_copy_tag, const client_state& orig, api::timestamp_type ts);
+    client_state(request_copy_tag, const client_state& orig, api::timestamp_type ts, cql_transport::cql_server* local_cql_server_ptr);
 
     client_state(external_tag, auth::service& auth_service, const socket_address& remote_address = socket_address(), bool thrift = false)
             : _cpu_of_origin(engine().cpu_id())
@@ -265,6 +270,11 @@ public:
 
     sstring& get_raw_keyspace() noexcept {
         return _keyspace;
+    }
+
+    cql_transport::cql_server& local_cql_server() {
+        assert(_local_cql_server_ptr);
+        return *_local_cql_server_ptr;
     }
 
 public:
