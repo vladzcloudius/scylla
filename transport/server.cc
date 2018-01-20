@@ -299,6 +299,14 @@ cql_server::cql_server(distributed<cql_server>& parent, distributed<service::sto
                             seastar::format("Holds an incrementing counter with the requests that ever blocked due to reaching the memory quota limit ({}B). "
                                             "The first derivative of this value shows how often we block due to memory exhaustion in the \"CQL transport\" component.", _max_request_size))),
 
+        sm::make_derive("requests_processed", _requests_processed,
+                        sm::description(
+                            seastar::format("Holds an incrementing counter with the requests that were processed on the current shard."))),
+
+        sm::make_gauge("requests_processing", _requests_processing,
+                        sm::description(
+                            seastar::format("Holds a number of requests being processed by the current shard at the moment. A too high value may indicate that the shard is overloaded."))),
+
     });
 }
 
@@ -463,6 +471,9 @@ future<cql_server::connection::processing_result>
 
     auto cqlop = static_cast<cql_binary_opcode>(op);
     tracing::trace_state_props_set trace_props;
+    cql_server& local_cql_server = client_state.local_cql_server();
+
+    ++local_cql_server._requests_processing;
 
     trace_props.set_if<tracing::trace_state_props::log_slow_query>(tracing::tracing::get_local_tracing_instance().slow_query_tracing_enabled());
     trace_props.set_if<tracing::trace_state_props::full_tracing>(tracing_request != tracing_request_type::not_requested);
@@ -562,8 +573,10 @@ future<cql_server::connection::processing_result>
         } catch (...) {
             return make_ready_future<processing_result>(std::make_pair(make_error(stream, exceptions::exception_code::SERVER_ERROR, "unknown error", client_state.get_trace_state()), client_state));
         }
-    }).finally([tracing_state = client_state.get_trace_state()] {
+    }).finally([tracing_state = client_state.get_trace_state(), &local_cql_server] {
         tracing::stop_foreground(tracing_state);
+        --local_cql_server._requests_processing;
+        ++local_cql_server._requests_processed;
     });
 }
 
