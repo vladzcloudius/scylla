@@ -231,7 +231,7 @@ auth::service* service::client_state::local_auth_service_copy(const service::cli
     return nullptr;
 }
 
-service::client_state::client_state(service::client_state::request_copy_tag, const service::client_state& orig, api::timestamp_type ts)
+service::client_state::client_state(service::client_state::request_copy_tag, const service::client_state& orig, api::timestamp_type ts, cql_transport::cql_server* local_cql_server_ptr)
         : _keyspace(orig._keyspace)
         , _cpu_of_origin(engine().cpu_id())
         , _user(local_user_copy(orig))
@@ -242,6 +242,7 @@ service::client_state::client_state(service::client_state::request_copy_tag, con
         , _remote_address(orig._remote_address)
         , _auth_service(local_auth_service_copy(orig))
         , _request_ts(ts)
+        , _local_cql_server_ptr(local_cql_server_ptr)
 {
     assert(!orig._trace_state_ptr);
 }

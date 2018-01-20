@@ -247,6 +247,7 @@ private:
             {}
         };
 
+        distributed<cql_server>& _distributed_server;
         cql_server& _server;
         ipv4_addr _server_addr;
         connected_socket _fd;
@@ -266,7 +267,7 @@ private:
             write_on_close
         };
     public:
-        connection(cql_server& server, ipv4_addr server_addr, connected_socket&& fd, socket_address addr);
+        connection(distributed<cql_server>& server, ipv4_addr server_addr, connected_socket&& fd, socket_address addr);
         ~connection();
         future<> process();
         future<> process_request();
