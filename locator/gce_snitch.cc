@@ -42,16 +42,6 @@
 
 namespace locator {
 
-class bad_gce_metadata_format : public std::exception {
-private:
-    sstring _msg;
-public:
-    explicit bad_gce_metadata_format(sstring what_arg) : _msg(std::move(what_arg)) {}
-    const char *what() const noexcept {
-        return _msg.c_str();
-    }
-};
-
 gce_snitch::gce_snitch(const sstring& fname, unsigned io_cpuid) : production_snitch_base(fname) {
     if (engine().cpu_id() == io_cpuid) {
         io_cpu_id() = io_cpuid;
@@ -75,7 +65,7 @@ future<> gce_snitch::load_config() {
             // Split "us-central1-a" or "asia-east1-a" into "us-central1"/"a" and "asia-east1"/"a".
             split(splits, az, is_any_of("-"));
             if (splits.size() <= 1) {
-                throw bad_gce_metadata_format(seastar::format("Bad GCE zone format: {}", az));
+                throw std::runtime_error(sprint("Bad GCE zone format: %s", az));
             }
 
             _my_rack = splits[splits.size() - 1];
@@ -133,14 +123,14 @@ future<sstring> gce_snitch::gce_api_call(sstring addr, sstring cmd) {
         in.consume(parser).get();
 
         if (parser.eof()) {
-            throw sstring("Bad HTTP response");
+            throw std::runtime_error("Bad HTTP response");
         }
 
         // Read HTTP response header first
         auto rsp = parser.get_parsed_response();
         auto it = rsp->_headers.find("Content-Length");
         if (it == rsp->_headers.end()) {
-            throw sstring("Error: HTTP response does not contain: Content-Length\n");
+            throw std::runtime_error("Error: HTTP response does not contain: Content-Length\n");
         }
 
         auto content_len = std::stoi(it->second);
