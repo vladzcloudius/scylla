@@ -955,16 +955,23 @@ void cql_server::load_balancer::balancing_state::build_pools() {
     // all available receivers, therefore we'll try to first populate the receivers that have the least number of loaders.
     class receivers_comp {
     private:
-        std::reference_wrapper<const std::vector<std::unordered_set<unsigned>>> _loaders;
-
+        balancing_state* _parent;
     public:
-        receivers_comp(const std::vector<std::unordered_set<unsigned>>& loaders) : _loaders(loaders) {}
+        receivers_comp(balancing_state* parent) : _parent(parent) {}
         bool operator()(unsigned a, unsigned b) const noexcept {
-            return _loaders.get()[a].size() < _loaders.get()[b].size();
+            size_t a_loaders_size = _parent->loaders[a].size();
+            size_t b_loaders_size = _parent->loaders[b].size();
+
+            // between receivers with the same amount of loaders choose the less loaded first
+            if (a_loaders_size == b_loaders_size) {
+                return _parent->loads[a] > _parent->loads[b];
+            }
+
+            return a_loaders_size < b_loaders_size;
         }
     };
 
-    std::multiset<unsigned, receivers_comp> potential_receivers(receivers_comp(std::cref(loaders)));
+    std::multiset<unsigned, receivers_comp> potential_receivers(receivers_comp(this));
 
     for (int i = 0; i < loads.size(); ++i) {
         if (!potential_senders.count(i) && can_accept_more_load(i)) {
