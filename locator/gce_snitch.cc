@@ -42,6 +42,16 @@
 
 namespace locator {
 
+class bad_gce_metadata_format : public std::exception {
+private:
+    sstring _msg;
+public:
+    explicit bad_gce_metadata_format(sstring what_arg) : _msg(std::move(what_arg)) {}
+    const char *what() const noexcept {
+        return _msg.c_str();
+    }
+};
+
 gce_snitch::gce_snitch(const sstring& fname, unsigned io_cpuid) : production_snitch_base(fname) {
     if (engine().cpu_id() == io_cpuid) {
         io_cpu_id() = io_cpuid;
@@ -64,7 +74,9 @@ future<> gce_snitch::load_config() {
 
             // Split "us-central1-a" or "asia-east1-a" into "us-central1"/"a" and "asia-east1"/"a".
             split(splits, az, is_any_of("-"));
-            assert(splits.size() > 1);
+            if (splits.size() <= 1) {
+                throw bad_gce_metadata_format(seastar::format("Bad GCE zone format: {}", az));
+            }
 
             _my_rack = splits[splits.size() - 1];
             _my_dc = az.substr(0, az.size() - 1 - _my_rack.size());
