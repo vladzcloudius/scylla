@@ -111,7 +111,7 @@ future<> gce_snitch::start() {
 
 future<sstring> gce_snitch::gce_api_call(sstring addr, sstring cmd) {
     return seastar::net::dns::resolve_name(addr, net::inet_address::family::INET).then([this, cmd] (net::inet_address a) {
-        return engine().net().connect(make_ipv4_address(ipv4_addr(a, 80))).then([this, cmd] (connected_socket fd) {
+        return connect(make_ipv4_address(ipv4_addr(a, 80))).then([this, cmd] (connected_socket fd) {
             _sd = std::move(fd);
             _in = std::move(_sd.input());
             _out = std::move(_sd.output());
