@@ -64,4 +64,5 @@ private:
     http_response_parser _parser;
     sstring _zone_req;
 };
+
 } // namespace locator
