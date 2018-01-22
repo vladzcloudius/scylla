@@ -110,47 +110,54 @@ future<> gce_snitch::start() {
 }
 
 future<sstring> gce_snitch::gce_api_call(sstring addr, sstring cmd) {
-    return seastar::net::dns::resolve_name(addr, net::inet_address::family::INET).then([this, cmd] (net::inet_address a) {
-        return connect(make_ipv4_address(ipv4_addr(a, 80))).then([this, cmd] (connected_socket fd) {
-            _sd = std::move(fd);
-            _in = std::move(_sd.input());
-            _out = std::move(_sd.output());
-            _zone_req = sstring("GET ") + cmd +
-                        sstring(" HTTP/1.1\r\nHost: metadata\r\n") +
-                        sstring("Metadata-Flavor: Google") +
-                        sstring("\r\n\r\n");
+//    connected_socket _sd;
+//    input_stream<char> _in;
+//    output_stream<char> _out;
+//    http_response_parser _parser;
+//    sstring _zone_req;
+//
+    return seastar::async([addr = std::move(addr), cmd = std::move(cmd)] {
+        using namespace boost::algorithm;
 
-            return _out.write(_zone_req.c_str()).then([this] {
-                return _out.flush();
-            });
-        }).then([this] {
-            _parser.init();
-            return _in.consume(_parser).then([this] {
-                if (_parser.eof()) {
-                    return make_exception_future<sstring>("Bad HTTP response");
-                }
+        net::inet_address a = seastar::net::dns::resolve_name(addr, net::inet_address::family::INET).get0();
+        connected_socket sd = connect(make_ipv4_address(ipv4_addr(a, 80))).get0();
+        input_stream<char> in = std::move(sd.input());
+        output_stream<char> out = std::move(sd.output());
+        sstring zone_req = seastar::format("GET {} HTTP/1.1\r\nHost: metadata\r\nMetadata-Flavor: Google\r\n\r\n", cmd);
 
-                // Read HTTP response header first
-                auto _rsp = _parser.get_parsed_response();
-                auto it = _rsp->_headers.find("Content-Length");
-                if (it == _rsp->_headers.end()) {
-                    return make_exception_future<sstring>("Error: HTTP response does not contain: Content-Length\n");
-                }
+        out.write(zone_req).get();
+        out.flush().get();
 
-                auto content_len = std::stoi(it->second);
+        http_response_parser parser;
+        parser.init();
+        in.consume(parser).get();
 
-                // Read HTTP response body
-                return _in.read_exactly(content_len).then([this] (temporary_buffer<char> buf) {
-                    using namespace boost::algorithm;
-                    sstring res(buf.get(), buf.size());
-                    std::vector<std::string> splits;
-                    split(splits, res, is_any_of("/"));
-                    return make_ready_future<sstring>(std::move(splits[splits.size() - 1]));
-                });
-            });
-        });
+        if (parser.eof()) {
+            throw sstring("Bad HTTP response");
+        }
+
+        // Read HTTP response header first
+        auto rsp = parser.get_parsed_response();
+        auto it = rsp->_headers.find("Content-Length");
+        if (it == rsp->_headers.end()) {
+            throw sstring("Error: HTTP response does not contain: Content-Length\n");
+        }
+
+        auto content_len = std::stoi(it->second);
+
+        // Read HTTP response body
+        temporary_buffer<char> buf = in.read_exactly(content_len).get0();
+
+        sstring res(buf.get(), buf.size());
+        std::vector<std::string> splits;
+        split(splits, res, is_any_of("/"));
+
+        // Close streams
+        out.close().get();
+        in.close().get();
+
+        return sstring(splits[splits.size() - 1]);
     });
-
 }
 
 future<sstring> gce_snitch::read_property_file() {

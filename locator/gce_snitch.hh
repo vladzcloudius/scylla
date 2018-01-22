@@ -57,12 +57,6 @@ protected:
     future<> load_config();
     future<sstring> gce_api_call(sstring addr, const sstring cmd);
     future<sstring> read_property_file();
-private:
-    connected_socket _sd;
-    input_stream<char> _in;
-    output_stream<char> _out;
-    http_response_parser _parser;
-    sstring _zone_req;
 };
 
 } // namespace locator
