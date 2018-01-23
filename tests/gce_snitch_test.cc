@@ -27,8 +27,10 @@
 #include <vector>
 #include <string>
 #include <tuple>
+#include <cstdlib>
 
 static boost::filesystem::path test_files_subdir("tests/snitch_property_files");
+static constexpr const char* META_SERVER_URL_ENV = "META_SERVER_URL";
 
 future<> one_test(const std::string& property_fname, bool exp_result) {
     using namespace locator;
@@ -44,50 +46,47 @@ future<> one_test(const std::string& property_fname, bool exp_result) {
     utils::fb_utilities::set_broadcast_address(gms::inet_address("localhost"));
     utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address("localhost"));
 
-    return i_endpoint_snitch::create_snitch<const sstring&>(
-        "GoogleCloudSnitch",
-        sstring(fname.string()))
-        .then_wrapped([exp_result] (auto&& f) {
-            try {
-                f.get();
-                if (!exp_result) {
-                    BOOST_ERROR("Failed to catch an error in a malformed "
-                                "configuration file");
-                    return i_endpoint_snitch::stop_snitch();
-                }
-                auto cpu0_dc = make_lw_shared<sstring>();
-                auto cpu0_rack = make_lw_shared<sstring>();
-                auto res = make_lw_shared<bool>(true);
-                auto my_address = utils::fb_utilities::get_broadcast_address();
+    char* meta_url_env = std::getenv(META_SERVER_URL_ENV);
+    sstring meta_url = locator::gce_snitch::GCE_QUERY_SERVER_ADDR;
+    if (meta_url_env != nullptr) {
+        meta_url = meta_url_env;
+    }
 
-                return i_endpoint_snitch::snitch_instance().invoke_on(0,
-                        [cpu0_dc, cpu0_rack,
-                         res, my_address] (snitch_ptr& inst) {
-                    *cpu0_dc =inst->get_datacenter(my_address);
-                    *cpu0_rack = inst->get_rack(my_address);
-                }).then([cpu0_dc, cpu0_rack, res, my_address] {
-                    return i_endpoint_snitch::snitch_instance().invoke_on_all(
-                            [cpu0_dc, cpu0_rack,
-                             res, my_address] (snitch_ptr& inst) {
-                        if (*cpu0_dc != inst->get_datacenter(my_address) ||
-                            *cpu0_rack != inst->get_rack(my_address)) {
-                            *res = false;
-                        }
-                    }).then([res] {
-                        if (!*res) {
-                            BOOST_ERROR("Data center or Rack do not match on "
-                                        "different shards");
-                        } else {
-                            BOOST_CHECK(true);
-                        }
-                        return i_endpoint_snitch::stop_snitch();
-                    });
-                });
-            } catch (std::exception& e) {
-                BOOST_CHECK(!exp_result);
-                return make_ready_future<>();
+    return i_endpoint_snitch::create_snitch<const sstring&, const unsigned&, const sstring&>("GoogleCloudSnitch", sstring(fname.string()), 0, meta_url).then_wrapped([exp_result] (auto&& f) {
+        try {
+            f.get();
+            if (!exp_result) {
+                BOOST_ERROR("Failed to catch an error in a malformed configuration file");
+                return i_endpoint_snitch::stop_snitch();
             }
-        });
+            auto cpu0_dc = make_lw_shared<sstring>();
+            auto cpu0_rack = make_lw_shared<sstring>();
+            auto res = make_lw_shared<bool>(true);
+            auto my_address = utils::fb_utilities::get_broadcast_address();
+
+            return i_endpoint_snitch::snitch_instance().invoke_on(0, [cpu0_dc, cpu0_rack, res, my_address] (snitch_ptr& inst) {
+                *cpu0_dc =inst->get_datacenter(my_address);
+                *cpu0_rack = inst->get_rack(my_address);
+            }).then([cpu0_dc, cpu0_rack, res, my_address] {
+                return i_endpoint_snitch::snitch_instance().invoke_on_all([cpu0_dc, cpu0_rack, res, my_address] (snitch_ptr& inst) {
+                    if (*cpu0_dc != inst->get_datacenter(my_address) ||
+                        *cpu0_rack != inst->get_rack(my_address)) {
+                        *res = false;
+                    }
+                }).then([res] {
+                    if (!*res) {
+                        BOOST_ERROR("Data center or Rack do not match on different shards");
+                    } else {
+                        BOOST_CHECK(true);
+                    }
+                    return i_endpoint_snitch::stop_snitch();
+                });
+            });
+        } catch (std::exception& e) {
+            BOOST_CHECK(!exp_result);
+            return make_ready_future<>();
+        }
+    });
 }
 
 #define GOSSIPING_TEST_CASE(tag, exp_res) \
