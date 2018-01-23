@@ -48,7 +48,7 @@ public:
     static constexpr const char* ZONE_NAME_QUERY_REQ = "/computeMetadata/v1/instance/zone";
     static constexpr const char* GCE_QUERY_SERVER_ADDR = "metadata.google.internal";
 
-    explicit gce_snitch(const sstring& fname = "", unsigned io_cpu_id = 0);
+    explicit gce_snitch(const sstring& fname = "", unsigned io_cpu_id = 0, const sstring& meta_server_url = "");
     virtual future<> start() override;
     virtual sstring get_name() const override {
         return "org.apache.cassandra.locator.GoogleCloudSnitch";
@@ -57,6 +57,9 @@ protected:
     future<> load_config();
     future<sstring> gce_api_call(sstring addr, const sstring cmd);
     future<sstring> read_property_file();
+
+private:
+    sstring _meta_server_url;
 };
 
 } // namespace locator

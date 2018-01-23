@@ -42,9 +42,10 @@
 
 namespace locator {
 
-gce_snitch::gce_snitch(const sstring& fname, unsigned io_cpuid) : production_snitch_base(fname) {
+gce_snitch::gce_snitch(const sstring& fname, unsigned io_cpuid, const sstring& meta_server_url) : production_snitch_base(fname) {
     if (engine().cpu_id() == io_cpuid) {
         io_cpu_id() = io_cpuid;
+        _meta_server_url = std::move(meta_server_url);
     }
 }
 
@@ -57,15 +58,22 @@ future<> gce_snitch::load_config() {
     using namespace boost::algorithm;
 
     if (engine().cpu_id() == io_cpu_id()) {
-        return gce_api_call(GCE_QUERY_SERVER_ADDR, ZONE_NAME_QUERY_REQ).then([this](sstring az){
-            assert(az.size());
+        sstring meta_server_url(GCE_QUERY_SERVER_ADDR);
+        if (!_meta_server_url.empty()) {
+            meta_server_url = std::move(_meta_server_url);
+        }
+
+        return gce_api_call(meta_server_url, ZONE_NAME_QUERY_REQ).then([this, meta_server_url] (sstring az) {
+            if (az.empty()) {
+                return make_exception_future(std::runtime_error(sprint("Got an empty zone name from the GCE meta server %s", meta_server_url)));
+            }
 
             std::vector<std::string> splits;
 
             // Split "us-central1-a" or "asia-east1-a" into "us-central1"/"a" and "asia-east1"/"a".
             split(splits, az, is_any_of("-"));
             if (splits.size() <= 1) {
-                throw std::runtime_error(sprint("Bad GCE zone format: %s", az));
+                return make_exception_future(std::runtime_error(sprint("Bad GCE zone format: %s", az)));
             }
 
             _my_rack = splits[splits.size() - 1];
@@ -106,7 +114,7 @@ future<sstring> gce_snitch::gce_api_call(sstring addr, sstring cmd) {
 //    http_response_parser _parser;
 //    sstring _zone_req;
 //
-    return seastar::async([addr = std::move(addr), cmd = std::move(cmd)] {
+    return seastar::async([addr = std::move(addr), cmd = std::move(cmd)] () -> sstring {
         using namespace boost::algorithm;
 
         net::inet_address a = seastar::net::dns::resolve_name(addr, net::inet_address::family::INET).get0();
@@ -161,6 +169,11 @@ future<sstring> gce_snitch::read_property_file() {
         return dc_suffix;
     });
 }
+
+// needed for a gce_snitch_test
+using registry_3_params = class_registrator<i_endpoint_snitch, gce_snitch, const sstring&, const unsigned&, const sstring&>;
+static registry_3_params registrator3("org.apache.cassandra.locator.GoogleCloudSnitch");
+static registry_3_params registrator3_short_name("GoogleCloudSnitch");
 
 using registry_2_params = class_registrator<i_endpoint_snitch, gce_snitch, const sstring&, unsigned>;
 static registry_2_params registrator2("org.apache.cassandra.locator.GoogleCloudSnitch");
