@@ -113,6 +113,7 @@ private:
         using load_balancer_clock = lowres_clock;
         static const load_balancer_clock::duration load_balancer_period;
         static constexpr unsigned compute_shard_id = 1;
+        static constexpr double alfa = 0.25;
 
         struct balancing_state {
             // Load level above which the local shard will start offloading requests to remote nodes
@@ -148,23 +149,36 @@ private:
 
         class queue_len_comp {
         private:
-            std::reference_wrapper<const std::vector<size_t>> _receivers_queue_len;
+            std::reference_wrapper<const std::vector<double>> _latencies;
 
         public:
-            queue_len_comp(const std::vector<size_t>& receivers_queue_len) : _receivers_queue_len(receivers_queue_len) {}
+            queue_len_comp(const std::vector<double>& latencies) : _latencies(latencies) {}
             bool operator()(unsigned a, unsigned b) const noexcept {
-                return _receivers_queue_len.get()[a] < _receivers_queue_len.get()[b];
+                return _latencies.get()[a] < _latencies.get()[b];
             }
         };
 
         using sorted_shards_type = std::multiset<unsigned, queue_len_comp>;
 
+    public:
+        using latency_clock = std::chrono::steady_clock;
+
+        struct request_ctx {
+            unsigned cpu;
+            size_t budget = 0;
+            latency_clock::time_point start_time;
+            latency_clock::time_point end_time;
+        };
+
+        using request_ctx_ptr = lw_shared_ptr<request_ctx>;
+
     private:
         distributed<cql_server>& _cql_server;
         cql_load_balance _lb;
         stdx::optional<balancing_state> _state; // is initialized only on shard0
-        std::vector<size_t> _receivers_queue_len;
+        std::vector<double> _ewma_latency;
         sorted_shards_type _sorted_shards;
+        std::vector<unsigned> _receiving_shards;
         gate _loads_collector_timer_gate; // FIXME: rename
         timer<load_balancer_clock> _loads_collector_timer; // FIXME: rename
         gate _load_balance_timer_gate; // FIXME: rename
@@ -174,8 +188,9 @@ private:
     public:
         load_balancer(distributed<cql_server>& cql_server, cql_load_balance lb);
         future<> stop();
-        unsigned pick_request_cpu(size_t budget) noexcept;
-        void complete_request_handling(unsigned id, size_t budget) noexcept;
+        request_ctx_ptr pick_request_cpu(size_t initial_budget);
+        void complete_request_handling(request_ctx_ptr ctx);
+        void mark_request_processing_end(request_ctx_ptr ctx, size_t response_body_size);
         sorted_shards_type::iterator get_sorted_iterator_for_id(unsigned id);
 
         /// \brief Rebalance the element pointed by the given iterator.
@@ -278,8 +293,6 @@ private:
         friend class process_request_executor;
         future<processing_result> process_request_one(bytes_view buf, uint8_t op, uint16_t stream, service::client_state client_state, tracing_request_type tracing_request);
         unsigned frame_size() const;
-        unsigned pick_request_cpu(size_t budget);
-        void complete_cpu_request_handling(unsigned id, size_t budget) noexcept;
         void update_client_state(processing_result& r);
         cql_binary_frame_v3 parse_frame(temporary_buffer<char> buf);
         future<temporary_buffer<char>> read_and_decompress_frame(size_t length, uint8_t flags);

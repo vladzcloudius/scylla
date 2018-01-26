@@ -207,6 +207,10 @@ public:
         _flags |= flag;
     }
 
+    size_t body_size() const noexcept {
+        return _body.size();
+    }
+
     scattered_message<char> make_message(uint8_t version);
     void serialize(const event::schema_change& event, uint8_t version);
     void write_byte(uint8_t b);
@@ -711,22 +715,27 @@ future<> cql_server::connection::process_request() {
 
             with_gate(_pending_requests_gate, [this, flags, op, stream, buf = std::move(buf), tracing_requested, mem_permit = std::move(mem_permit)] () mutable {
                 auto bv = bytes_view{reinterpret_cast<const int8_t*>(buf.begin()), buf.size()};
-                auto cpu = pick_request_cpu(buf.size() + 1);
+                cql_server::load_balancer::request_ctx_ptr ctx = _server._lbalancer.pick_request_cpu(buf.size() + 1);
                 return [&] {
-                    if (cpu == engine().cpu_id()) {
+                    if (ctx->cpu == engine().cpu_id()) {
                         return process_request_stage(this, bv, op, stream, service::client_state(service::client_state::request_copy_tag{}, _client_state, _client_state.get_timestamp(), &_server), tracing_requested);
                     } else {
-                        return smp::submit_to(cpu, [this, bv = std::move(bv), op, stream, client_state = _client_state, tracing_requested, ts = _client_state.get_timestamp()] () mutable {
+                        return smp::submit_to(ctx->cpu, [this, bv = std::move(bv), op, stream, client_state = _client_state, tracing_requested, ts = _client_state.get_timestamp()] () mutable {
                             return process_request_stage(this, bv, op, stream, service::client_state(service::client_state::request_copy_tag{}, client_state, ts, &_distributed_server.local()), tracing_requested);
                         });
                     }
-                }().then([this, flags] (auto&& response) {
+                }().then([this, flags, ctx] (auto&& response) mutable {
                     update_client_state(response);
+                    // Here we'll record the TS of handling completion and add the size of the response body to the bytes "budget"
+                    // of this request. If request times out (and we don't pass here) it will be heavily penalize the corresponding
+                    // shard by both recording the longer latency in the complete_request_handling() below and by using the shorter
+                    // bytes "budget" for weighing.
+                    _server._lbalancer.mark_request_processing_end(std::move(ctx), response.cql_response->body_size());
                     return this->write_response(std::move(response.cql_response), _compression);
-                }).finally([this, buf = std::move(buf), mem_permit = std::move(mem_permit), cpu] {
+                }).finally([this, buf = std::move(buf), mem_permit = std::move(mem_permit), ctx] () mutable {
                     // Keep buf alive.
                     --_server._requests_serving;
-                    complete_cpu_request_handling(cpu, buf.size() + 1);
+                    _server._lbalancer.complete_request_handling(std::move(ctx));
                 });
             }).handle_exception([] (std::exception_ptr ex) {
                 clogger.error("request processing failed: {}", ex);
@@ -792,42 +801,24 @@ future<temporary_buffer<char>> cql_server::connection::read_and_decompress_frame
     return _read_buf.read_exactly(length);
 }
 
-unsigned cql_server::connection::pick_request_cpu(size_t budget) {
-    return _server._lbalancer.pick_request_cpu(budget);
-}
+cql_server::load_balancer::request_ctx_ptr cql_server::load_balancer::pick_request_cpu(size_t initial_budget) {
+    lw_shared_ptr<request_ctx> ctx = make_lw_shared<request_ctx>();
 
-void cql_server::connection::complete_cpu_request_handling(unsigned id, size_t budget) noexcept {
-    return _server._lbalancer.complete_request_handling(id, budget);
-}
-
-unsigned cql_server::load_balancer::pick_request_cpu(size_t budget) noexcept {
     if (_lb != cql_load_balance::none) {
         // FIXME: remove this assert - this is a fast path!
-        assert(budget != 0);
+        assert(initial_budget != 0);
 
-        unsigned local_shard_id = engine().cpu_id();
-        sorted_shards_type::iterator id_it;
+        sorted_shards_type::iterator id_it = _sorted_shards.begin();
 
-        id_it = _sorted_shards.begin();
+        ctx->cpu = *id_it;
+        ctx->budget = initial_budget;
+        ctx->start_time = latency_clock::now();
 
-        if (_sorted_shards.size() > 1) {
-            // Prioritize the local shard
-            if (_receivers_queue_len[*id_it] == _receivers_queue_len[local_shard_id]) {
-                // find the iterator for the local shard
-                id_it = get_sorted_iterator_for_id(local_shard_id);
-            }
-        }
-
-        unsigned id = *id_it;
-
-        // rebalance the tree
-        _receivers_queue_len[id] += budget;
-        rebalance_id(id_it);
-
-        return id;
+        return ctx;
     }
 
-    return engine().cpu_id();
+    ctx->cpu = engine().cpu_id();
+    return ctx;
 }
 
 cql_server::load_balancer::sorted_shards_type::iterator cql_server::load_balancer::get_sorted_iterator_for_id(unsigned id) {
@@ -850,30 +841,57 @@ void cql_server::load_balancer::rebalance_id(sorted_shards_type::iterator id_it)
     _sorted_shards.insert(std::move(id_node));
 }
 
-void cql_server::load_balancer::complete_request_handling(unsigned id, size_t budget) noexcept {
+void cql_server::load_balancer::mark_request_processing_end(request_ctx_ptr ctx, size_t response_body_size) {
     if (_lb != cql_load_balance::none) {
-        auto it = get_sorted_iterator_for_id(id);
+        ctx->end_time = latency_clock::now();
+        ctx->budget += response_body_size;
+    }
+}
+
+void cql_server::load_balancer::complete_request_handling(cql_server::load_balancer::request_ctx_ptr ctx) {
+    if (_lb != cql_load_balance::none) {
+        using namespace std::chrono;
+
+        // If end_time hasn't been set yet (request has failed) - set it now
+        if (ctx->start_time > ctx->end_time) {
+            ctx->end_time = latency_clock::now();
+        }
 
         // FIXME: remove this assert - it's a fast path!
-        assert(_receivers_queue_len[id] >= budget);
+        assert(ctx->budget > 0);
 
-        // rebalance the tree
-        _receivers_queue_len[id] -= budget;
-        rebalance_id(it);
+        // This value is measured in "nanoseconds per byte" units.
+        double weighted_latency = double(duration_cast<nanoseconds>(ctx->end_time - ctx->start_time).count()) / ctx->budget;
+
+
+        std::for_each(_receiving_shards.begin(), _receiving_shards.end(), [weighted_latency, this, cur_cpu = ctx->cpu] (unsigned cpu) {
+            auto cpu_it = get_sorted_iterator_for_id(cpu);
+
+            // Decay the average latency of all involved shards for each served packet. This way we will ensure that all shards
+            // will eventually start participating - even the slowest among them. Otherwise the slow shards would never be chosen.
+            _ewma_latency[cpu] *= (1 - alfa);
+            if (cpu == cur_cpu) {
+                 _ewma_latency[cpu] += alfa * weighted_latency;
+            }
+
+            // rebalance the tree
+            rebalance_id(cpu_it);
+        });
     }
 }
 
 cql_server::load_balancer::load_balancer(distributed<cql_server>& cql_server, cql_load_balance lb)
     : _cql_server(cql_server)
     , _lb((smp::count > 1) ? lb : cql_load_balance::none)
-    , _receivers_queue_len(smp::count, 0)
-    , _sorted_shards(queue_len_comp(_receivers_queue_len))
+    , _ewma_latency(smp::count, 0)
+    , _sorted_shards(queue_len_comp(_ewma_latency))
     , _loads_collector_timer([this] { collect_loads(); })
     , _load_balance_timer([this] { build_shards_pool(); })
 {
     if (_lb != cql_load_balance::none) {
-        // First entry should always be a local shard index.
+        // The local shard index should always be present.
         _sorted_shards.insert(engine().cpu_id());
+        _receiving_shards.push_back(engine().cpu_id());
 
         // Start loads collector on a compute shard - the rest of the shards are going to read them from it.
         if (engine().cpu_id() == compute_shard_id) {
@@ -1004,6 +1022,33 @@ void cql_server::load_balancer::balancing_state::build_pools() {
             }
         }
     }
+
+#if 0
+    // FIXME: debug prints
+    printf("Receivers:\n");
+    for (int i = 0; i < receivers.size(); ++i) {
+        if (receivers[i].empty()) {
+            continue;
+        }
+        printf("[%d]:", i);
+        for (auto v : receivers[i]) {
+            printf("%d ", v);
+        }
+        printf("\n");
+    }
+
+    printf("Loaders:\n");
+    for (int i = 0; i < loaders.size(); ++i) {
+        if (loaders[i].empty()) {
+            continue;
+        }
+        printf("[%d]:", i);
+        for (auto v : loaders[i]) {
+            printf("%d ", v);
+        }
+        printf("\n");
+    }
+#endif
 }
 
 void cql_server::load_balancer::build_shards_pool() {
@@ -1012,7 +1057,8 @@ void cql_server::load_balancer::build_shards_pool() {
         return _cql_server.invoke_on(compute_shard_id, [idx = engine().cpu_id()] (cql_server& s) {
             return s._lbalancer.get_pool(idx);
         }).then([this] (std::vector<unsigned> new_shards_pool) {
-            std::multiset<unsigned, queue_len_comp> new_sorted_shards(new_shards_pool.begin(), new_shards_pool.end(), queue_len_comp(_receivers_queue_len));
+            std::exchange(_receiving_shards, new_shards_pool);
+            std::multiset<unsigned, queue_len_comp> new_sorted_shards(_receiving_shards.begin(), _receiving_shards.end(), queue_len_comp(_ewma_latency));
             std::exchange(_sorted_shards, std::move(new_sorted_shards));
         }).finally([this] {
             _load_balance_timer.arm(load_balancer_period);
