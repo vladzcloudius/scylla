@@ -114,6 +114,8 @@ private:
         static const load_balancer_clock::duration load_balancer_period;
         static constexpr unsigned compute_shard_id = 1;
         static constexpr double alfa = 0.25;
+        // The smallest positive double value. We don't want the ewma value to become zero.
+        static constexpr double min_ewma_latency_val = std::numeric_limits<double>::min();
 
         struct balancing_state {
             // Load level above which the local shard will start offloading requests to remote nodes
@@ -147,18 +149,36 @@ private:
             }
         };
 
-        class queue_len_comp {
+        /// \class shards_comparison_metric
+        /// \brief Implements the metric (or the order) that is used when selecting which shard should handle the next request.
+        /// The metric takes into an account both the EWMA latency value and the number of currently outstanding requests (for
+        /// which we still don't know the final latency). This metric will penalize (make them less likely to be chosen) the shards
+        /// that have many outstanding requests and those with the higher requests handling latency.
+        ///
+        /// The latency is measured in the "time per bytes" units.
+        ///
+        /// The metric's formula is: "latency" * 1.001^num_outstanding_requests.
+        class shards_comparison_metric {
         private:
-            std::reference_wrapper<const std::vector<double>> _latencies;
+            // Increase the EWMA latency by 10% for each 100 outstanding requests
+            static constexpr double queue_length_factor_base = 1.001;
+
+        private:
+            load_balancer* _lb;
 
         public:
-            queue_len_comp(const std::vector<double>& latencies) : _latencies(latencies) {}
-            bool operator()(unsigned a, unsigned b) const noexcept {
-                return _latencies.get()[a] < _latencies.get()[b];
+            shards_comparison_metric(load_balancer* lb) : _lb(lb) {}
+            bool operator()(unsigned a, unsigned b) const {
+                return get_shard_metric(a) < get_shard_metric(b);
+            }
+
+        private:
+            double get_shard_metric(unsigned cpu) const {
+                return _lb->_ewma_latency[cpu] * std::pow(queue_length_factor_base, _lb->_outstanding_requests[cpu]);
             }
         };
 
-        using sorted_shards_type = std::multiset<unsigned, queue_len_comp>;
+        using sorted_shards_type = std::multiset<unsigned, shards_comparison_metric>;
 
     public:
         using latency_clock = std::chrono::steady_clock;
@@ -176,9 +196,17 @@ private:
         distributed<cql_server>& _cql_server;
         cql_load_balance _lb;
         stdx::optional<balancing_state> _state; // is initialized only on shard0
+
+        // Contains the EWMA latency for each shard in the system from the point of view of the local shard.
         std::vector<double> _ewma_latency;
+
+        // Number of outstanding requests to each shard
+        std::vector<size_t> _outstanding_requests;
+
+        // The two below contain the shard IDs of the shards that currently participate in the load balancing on the local shard.
         sorted_shards_type _sorted_shards;
         std::vector<unsigned> _receiving_shards;
+
         gate _loads_collector_timer_gate; // FIXME: rename
         timer<load_balancer_clock> _loads_collector_timer; // FIXME: rename
         gate _load_balance_timer_gate; // FIXME: rename
