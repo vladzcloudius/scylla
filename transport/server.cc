@@ -86,7 +86,11 @@ enum class cql_binary_opcode : uint8_t {
     AUTH_SUCCESS   = 16,
 };
 
-const cql_server::load_balancer::load_balancer_clock::duration cql_server::load_balancer::load_balancer_period = std::chrono::seconds(1);
+// The "load" metrics contains the average load from the last 5s and is refreshed every 1s. Therefore
+// we'll rebuild the receivers/loaders sets every 2s in order to both take the load change into an account
+// (there's no point to re-balance before the _load metric had a chance to get updated, namely more frequently than every 1s)
+// and in order to avoid a race with the _load refresh timer.
+const cql_server::load_balancer::load_balancer_clock::duration cql_server::load_balancer::load_balancer_period = std::chrono::seconds(2);
 
 inline db::consistency_level wire_to_consistency(int16_t v)
 {
