@@ -818,7 +818,7 @@ cql_server::load_balancer::request_ctx_ptr cql_server::load_balancer::pick_reque
         ctx->budget = initial_budget;
         ctx->start_time = latency_clock::now();
 
-        rebalance_id(id_it, [this, cpu = *id_it] { ++_outstanding_requests[cpu]; });
+        rebalance_id(id_it, [this, cpu = *id_it] { _queue_len_metric[cpu] *= queue_length_factor_base; });
 
         return ctx;
     }
@@ -844,8 +844,11 @@ void cql_server::load_balancer::rebalance_id(sorted_shards_type::iterator id_it,
     if (id_it == _sorted_shards.end()) {
         return;
     }
+    unsigned cpu = *id_it;
     auto id_node = _sorted_shards.extract(id_it);
     metric_updater();
+    // FIXME: make these a members of the same struct to decrease the dereference amount.
+    _shard_metric[cpu] = _ewma_latency[cpu] * _queue_len_metric[cpu];
     _sorted_shards.insert(std::move(id_node));
 }
 
@@ -881,7 +884,7 @@ void cql_server::load_balancer::complete_request_handling(cql_server::load_balan
                 _ewma_latency[cpu] = std::max((1 - alfa) * _ewma_latency[cpu], min_ewma_latency_val);
                 if (cpu == cur_cpu) {
                     _ewma_latency[cpu] += alfa * weighted_latency;
-                    --_outstanding_requests[cpu];
+                    _queue_len_metric[cpu] /= queue_length_factor_base;
                 }
             });
         });
@@ -892,8 +895,9 @@ cql_server::load_balancer::load_balancer(distributed<cql_server>& cql_server, cq
     : _cql_server(cql_server)
     , _lb((smp::count > 1) ? lb : cql_load_balance::none)
     , _ewma_latency(smp::count, min_ewma_latency_val)
-    , _outstanding_requests(smp::count, 0)
-    , _sorted_shards(shards_comparison_metric(this))
+    , _queue_len_metric(smp::count, 1)
+    , _shard_metric(smp::count, min_ewma_latency_val)
+    , _sorted_shards(shards_metric_comp(this->_shard_metric))
     , _loads_collector_timer([this] { collect_loads(); })
     , _load_balance_timer([this] { build_shards_pool(); })
 {
@@ -1069,7 +1073,7 @@ void cql_server::load_balancer::build_shards_pool() {
             return s._lbalancer.get_pool(idx);
         }).then([this] (std::vector<unsigned> new_shards_pool) {
             std::exchange(_receiving_shards, new_shards_pool);
-            std::multiset<unsigned, shards_comparison_metric> new_sorted_shards(_receiving_shards.begin(), _receiving_shards.end(), shards_comparison_metric(this));
+            std::multiset<unsigned, shards_metric_comp> new_sorted_shards(_receiving_shards.begin(), _receiving_shards.end(), shards_metric_comp(this->_shard_metric));
             std::exchange(_sorted_shards, std::move(new_sorted_shards));
 
 #if 0
