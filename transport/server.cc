@@ -818,7 +818,11 @@ cql_server::load_balancer::request_ctx_ptr cql_server::load_balancer::pick_reque
         ctx->budget = initial_budget;
         ctx->start_time = latency_clock::now();
 
-        rebalance_id(id_it, [this, cpu = *id_it] { _queue_len_metric[cpu] *= queue_length_factor_base; });
+        rebalance_id(id_it, [this, cpu = *id_it] {
+            auto& cur_shard_metrics = _shard_metric[cpu];
+            cur_shard_metrics.inc_queue_len();
+            cur_shard_metrics.recalculate_value();
+        });
 
         return ctx;
     }
@@ -844,11 +848,8 @@ void cql_server::load_balancer::rebalance_id(sorted_shards_type::iterator id_it,
     if (id_it == _sorted_shards.end()) {
         return;
     }
-    unsigned cpu = *id_it;
     auto id_node = _sorted_shards.extract(id_it);
     metric_updater();
-    // FIXME: make these a members of the same struct to decrease the dereference amount.
-    _shard_metric[cpu] = _ewma_latency[cpu] * _queue_len_metric[cpu];
     _sorted_shards.insert(std::move(id_node));
 }
 
@@ -874,18 +875,22 @@ void cql_server::load_balancer::complete_request_handling(cql_server::load_balan
         // This value is measured in "nanoseconds per byte" units.
         double weighted_latency = double(duration_cast<nanoseconds>(ctx->end_time - ctx->start_time).count()) / ctx->budget;
 
+        // Decay the EWMA latency of all involved shards for each served packet. This way we will ensure that all shards
+        // will eventually start participating - even the slowest among them. Otherwise the slow shards would never be chosen.
         std::for_each(_receiving_shards.begin(), _receiving_shards.end(), [weighted_latency, this, cur_cpu = ctx->cpu] (unsigned cpu) {
             auto cpu_it = get_sorted_iterator_for_id(cpu);
 
             // rebalance the tree
             rebalance_id(cpu_it, [this, cpu, cur_cpu, weighted_latency] {
-                // Decay the EWMA latency of all involved shards for each served packet. This way we will ensure that all shards
-                // will eventually start participating - even the slowest among them. Otherwise the slow shards would never be chosen.
-                _ewma_latency[cpu] = std::max((1 - alfa) * _ewma_latency[cpu], min_ewma_latency_val);
+                auto& cur_shard_metrics = _shard_metric[cpu];
+
+                cur_shard_metrics.decay_ewma();
                 if (cpu == cur_cpu) {
-                    _ewma_latency[cpu] += alfa * weighted_latency;
-                    _queue_len_metric[cpu] /= queue_length_factor_base;
+                    cur_shard_metrics.update_ewma(weighted_latency);
+                    cur_shard_metrics.dec_queue_len();
                 }
+
+                cur_shard_metrics.recalculate_value();
             });
         });
     }
@@ -894,9 +899,7 @@ void cql_server::load_balancer::complete_request_handling(cql_server::load_balan
 cql_server::load_balancer::load_balancer(distributed<cql_server>& cql_server, cql_load_balance lb)
     : _cql_server(cql_server)
     , _lb((smp::count > 1) ? lb : cql_load_balance::none)
-    , _ewma_latency(smp::count, min_ewma_latency_val)
-    , _queue_len_metric(smp::count, 1)
-    , _shard_metric(smp::count, min_ewma_latency_val)
+    , _shard_metric(smp::count)
     , _sorted_shards(shards_metric_comp(this->_shard_metric))
     , _loads_collector_timer([this] { collect_loads(); })
     , _load_balance_timer([this] { build_shards_pool(); })

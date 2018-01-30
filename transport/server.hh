@@ -113,11 +113,6 @@ private:
         using load_balancer_clock = lowres_clock;
         static const load_balancer_clock::duration load_balancer_period;
         static constexpr unsigned compute_shard_id = 1;
-        static constexpr double alfa = 0.25;
-        // The smallest positive double value. We don't want the ewma value to become zero.
-        static constexpr double min_ewma_latency_val = std::numeric_limits<double>::min();
-        // Increase the EWMA latency by 10% for each 100 outstanding requests
-        static constexpr double queue_length_factor_base = 1.001;
 
         struct balancing_state {
             // Load level above which the local shard will start offloading requests to remote nodes
@@ -149,14 +144,60 @@ private:
             }
         };
 
-        class shards_metric_comp {
+        class shard_metric {
         private:
-            std::reference_wrapper<const std::vector<double>> _metric_ref;
+            // The smallest positive double value. We don't want the ewma value to become zero.
+            static constexpr double min_ewma_latency_val = std::numeric_limits<double>::min();
+            // Exponential decay parameter
+            static constexpr double alfa = 0.25;
+            // Increase the metric by 1% for each 100 outstanding requests
+            static constexpr double queue_length_factor_base = 1.0001;
+
+        private:
+            // Contains the EWMA latency for the corresponding shard in the system from the point of view of the local shard.
+            double _ewma_latency = min_ewma_latency_val;
+            // The metric that depends on the current queue length: queue_length_factor_base^N, when N is a current queue length.
+            double _queue_len_metric = 1;
+            // This is a synthetic metric that is used for selecting the shard to process the next request.
+            // The shard with the lowers metric valus is going to be selected.
+            //
+            // The metric's formula is: "latency" * queue_length_factor_base^num_outstanding_requests.
+            double _value = min_ewma_latency_val;
 
         public:
-            shards_metric_comp(const std::vector<double>& metric) : _metric_ref(metric) {}
+            double value() const noexcept {
+                return _value;
+            }
+
+            void decay_ewma() noexcept {
+                _ewma_latency = std::max((1 - alfa) * _ewma_latency, min_ewma_latency_val);
+            }
+
+            void update_ewma(double weighted_latency) {
+                _ewma_latency += alfa * weighted_latency;
+            }
+
+            void inc_queue_len() noexcept {
+                _queue_len_metric *= queue_length_factor_base;
+            }
+
+            void dec_queue_len() noexcept {
+                _queue_len_metric = std::max(1.0, _queue_len_metric / queue_length_factor_base);
+            }
+
+            void recalculate_value() noexcept {
+                _value = _ewma_latency * _queue_len_metric;
+            }
+        };
+
+        class shards_metric_comp {
+        private:
+            std::reference_wrapper<const std::vector<shard_metric>> _metric_ref;
+
+        public:
+            shards_metric_comp(const std::vector<shard_metric>& metric) : _metric_ref(metric) {}
             bool operator()(unsigned a, unsigned b) const {
-                return _metric_ref.get()[a] < _metric_ref.get()[b];
+                return _metric_ref.get()[a].value() < _metric_ref.get()[b].value();
             }
         };
 
@@ -178,19 +219,7 @@ private:
         distributed<cql_server>& _cql_server;
         cql_load_balance _lb;
         stdx::optional<balancing_state> _state; // is initialized only on shard0
-
-        // Contains the EWMA latency for each shard in the system from the point of view of the local shard.
-        std::vector<double> _ewma_latency;
-
-        // The metric that depends on the current queue length: queue_length_factor_base^N, when N is a current queue length.
-        std::vector<double> _queue_len_metric;
-
-        // This is a synthetic metric that is used for selecting the shard to process the next request.
-        // The shard with the lowers metric valus is going to be selected.
-        //
-        // The metric's formula is: "latency" * 1.001^num_outstanding_requests.
-        std::vector<double> _shard_metric;
-
+        std::vector<shard_metric> _shard_metric;
         // The two below contain the shard IDs of the shards that currently participate in the load balancing on the local shard.
         sorted_shards_type _sorted_shards;
         std::vector<unsigned> _receiving_shards;
@@ -205,8 +234,8 @@ private:
         load_balancer(distributed<cql_server>& cql_server, cql_load_balance lb);
         future<> stop();
         request_ctx_ptr pick_request_cpu(size_t initial_budget);
-        void complete_request_handling(request_ctx_ptr ctx);
         void mark_request_processing_end(request_ctx_ptr ctx, size_t response_body_size);
+        void complete_request_handling(request_ctx_ptr ctx);
         sorted_shards_type::iterator get_sorted_iterator_for_id(unsigned id);
 
         /// \brief Rebalance the element pointed by the given iterator.
