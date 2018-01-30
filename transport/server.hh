@@ -224,7 +224,8 @@ private:
         /// \brief Rebalance the element pointed by the given iterator.
         /// \note \ref id_it is going to become invalid after the call.
         /// \param id_it Iterator to the element to rebalance.
-        void rebalance_id(sorted_shards_type::iterator id_it);
+        template <class Func>
+        void rebalance_id(sorted_shards_type::iterator id_it, Func&& metric_updater);
 
     private:
         /// \brief Collect _load values from all shards. Runs on shard0 only.
