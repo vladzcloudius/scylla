@@ -122,8 +122,6 @@ private:
             static constexpr double start_offload_threshold = 0.25; // corresponds to the load of 75%
             // Load when we want to start removing senders from the shard's loaders.
             static constexpr double start_backoff_threshold = 0.05; // corresponds to the load of 95%
-            // The ratio of the "destination" shard load compared to the local shard load which allows offloading requests to it (see cql_server::build_shards_pool() description)
-            static constexpr double can_accept_requests_load_factor = 1.25;
 
             std::vector<double> loads;
             std::vector<std::unordered_set<unsigned>> loaders;

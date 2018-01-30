@@ -876,7 +876,7 @@ void cql_server::load_balancer::complete_request_handling(cql_server::load_balan
 
             // rebalance the tree
             rebalance_id(cpu_it, [this, cpu, cur_cpu, weighted_latency] {
-                // Decay the average latency of all involved shards for each served packet. This way we will ensure that all shards
+                // Decay the EWMA latency of all involved shards for each served packet. This way we will ensure that all shards
                 // will eventually start participating - even the slowest among them. Otherwise the slow shards would never be chosen.
                 _ewma_latency[cpu] = std::max((1 - alfa) * _ewma_latency[cpu], min_ewma_latency_val);
                 if (cpu == cur_cpu) {
@@ -1021,7 +1021,9 @@ void cql_server::load_balancer::balancing_state::build_pools() {
         if (receivers[i].size() < max_receivers_size) {
             for (auto it = potential_receivers.begin(); it != potential_receivers.end(); ++it) {
                 unsigned k = *it;
-                if (!loaders[k].count(i) && sender_load < can_accept_requests_load_factor * (loads[k] - 1) + 1) {
+                // Don't offload to the shard who's load is similar to the load of the sender. We'll choose the "distance"
+                // the way that would ensure that the domains of "senders" and "receivers" do not intersect.
+                if (!loaders[k].count(i) && sender_load < loads[k] - start_offload_threshold) {
                     potential_receivers.erase(it);
                     ++num_of_new_receivers;
                     receivers[i].insert(k);
