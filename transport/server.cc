@@ -820,6 +820,8 @@ cql_server::load_balancer::request_ctx_ptr cql_server::load_balancer::pick_reque
 
         ++_outstanding_requests[*id_it];
 
+        rebalance_id(id_it);
+
         return ctx;
     }
 
@@ -858,8 +860,6 @@ void cql_server::load_balancer::complete_request_handling(cql_server::load_balan
     if (_lb != cql_load_balance::none) {
         using namespace std::chrono;
 
-        --_outstanding_requests[ctx->cpu];
-
         // If end_time hasn't been set yet (request has failed) - set it now
         if (ctx->start_time > ctx->end_time) {
             ctx->end_time = latency_clock::now();
@@ -878,7 +878,8 @@ void cql_server::load_balancer::complete_request_handling(cql_server::load_balan
             // will eventually start participating - even the slowest among them. Otherwise the slow shards would never be chosen.
             _ewma_latency[cpu] = std::max((1 - alfa) * _ewma_latency[cpu], min_ewma_latency_val);
             if (cpu == cur_cpu) {
-                 _ewma_latency[cpu] += alfa * weighted_latency;
+                _ewma_latency[cpu] += alfa * weighted_latency;
+                --_outstanding_requests[ctx->cpu];
             }
 
             // rebalance the tree
@@ -1068,6 +1069,16 @@ void cql_server::load_balancer::build_shards_pool() {
             std::exchange(_receiving_shards, new_shards_pool);
             std::multiset<unsigned, shards_comparison_metric> new_sorted_shards(_receiving_shards.begin(), _receiving_shards.end(), shards_comparison_metric(this));
             std::exchange(_sorted_shards, std::move(new_sorted_shards));
+
+#if 0
+            if (_receiving_shards.size() > 1) {
+                std::for_each(_receiving_shards.begin(), _receiving_shards.end(), [] (unsigned cpu) {
+                    clogger.info("EWMA[{}]: {}, queue_len: {}", cpu, _ewma_latency[cpu], _outstanding_requests[cpu]);
+                });
+            }
+
+#endif
+
         }).finally([this] {
             _load_balance_timer.arm(load_balancer_period);
         });
