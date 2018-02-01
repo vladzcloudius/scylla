@@ -186,7 +186,7 @@ private:
             }
 
             void recalculate_value() noexcept {
-                _value = _ewma_latency * _queue_len_metric;
+                _value = _ewma_latency /* * _queue_len_metric*/;
             }
         };
 
