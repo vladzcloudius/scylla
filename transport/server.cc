@@ -846,6 +846,7 @@ cql_server::load_balancer::sorted_shards_type::iterator cql_server::load_balance
 template <class Func>
 void cql_server::load_balancer::rebalance_id(sorted_shards_type::iterator id_it, Func&& metric_updater) {
     if (id_it == _sorted_shards.end()) {
+        metric_updater();
         return;
     }
     auto id_node = _sorted_shards.extract(id_it);
@@ -874,24 +875,13 @@ void cql_server::load_balancer::complete_request_handling(cql_server::load_balan
 
         // This value is measured in "nanoseconds per byte" units.
         double weighted_latency = double(duration_cast<nanoseconds>(ctx->end_time - ctx->start_time).count()) / ctx->budget;
-
-        // Decay the EWMA latency of all involved shards for each served packet. This way we will ensure that all shards
-        // will eventually start participating - even the slowest among them. Otherwise the slow shards would never be chosen.
-        std::for_each(_receiving_shards.begin(), _receiving_shards.end(), [weighted_latency, this, cur_cpu = ctx->cpu] (unsigned cpu) {
-            auto cpu_it = get_sorted_iterator_for_id(cpu);
-
-            // rebalance the tree
-            rebalance_id(cpu_it, [this, cpu, cur_cpu, weighted_latency] {
-                auto& cur_shard_metrics = _shard_metric[cpu];
-
-                cur_shard_metrics.decay_ewma();
-                if (cpu == cur_cpu) {
-                    cur_shard_metrics.update_ewma(weighted_latency);
-                    cur_shard_metrics.dec_queue_len();
-                }
-
-                cur_shard_metrics.recalculate_value();
-            });
+        auto cpu_it = get_sorted_iterator_for_id(ctx->cpu);
+        rebalance_id(cpu_it, [this, cpu = ctx->cpu, weighted_latency] {
+            auto& cur_shard_metrics = _shard_metric[cpu];
+            cur_shard_metrics.decay_ewma();
+            cur_shard_metrics.update_ewma(weighted_latency);
+            cur_shard_metrics.dec_queue_len();
+            cur_shard_metrics.recalculate_value();
         });
     }
 }
@@ -942,9 +932,6 @@ void cql_server::load_balancer::collect_loads() {
 // TODO: move the small operations into helper methods
 // TODO: make sure the original state is preserved if some of the allocations below fails
 void cql_server::load_balancer::balancing_state::build_pools() {
-
-    // FIXME: optimize by keeping a set of all current receivers and senders
-
     // Remember all potential senders: loaded above start_offload_threshold and not receivers.
     // We want to learn them here in order to prevent the receivers from turning into senders
     // in the same balancing period. We don't want this because the receivers may have a high load
@@ -1075,6 +1062,13 @@ void cql_server::load_balancer::build_shards_pool() {
         return _cql_server.invoke_on(compute_shard_id, [idx = engine().cpu_id()] (cql_server& s) {
             return s._lbalancer.get_pool(idx);
         }).then([this] (std::vector<unsigned> new_shards_pool) {
+            // Decay the EWMA latency of all involved shards for each served packet. This way we will ensure that all shards
+            // will eventually start participating - even the slowest among them. Otherwise the slow shards would never be chosen.
+            std::for_each(_shard_metric.begin(), _shard_metric.end(), [] (shard_metric& sm) {
+                sm.decay_ewma();
+                sm.recalculate_value();
+            });
+
             std::exchange(_receiving_shards, new_shards_pool);
             std::multiset<unsigned, shards_metric_comp> new_sorted_shards(_receiving_shards.begin(), _receiving_shards.end(), shards_metric_comp(this->_shard_metric));
             std::exchange(_sorted_shards, std::move(new_sorted_shards));
