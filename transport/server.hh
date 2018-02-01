@@ -157,7 +157,7 @@ private:
             // Contains the EWMA latency for the corresponding shard in the system from the point of view of the local shard.
             double _ewma_latency = min_ewma_latency_val;
             // The metric that depends on the current queue length: queue_length_factor_base^N, when N is a current queue length.
-            double _queue_len_metric = 1;
+            size_t _queue_len_metric = 1;
             // This is a synthetic metric that is used for selecting the shard to process the next request.
             // The shard with the lowers metric valus is going to be selected.
             //
@@ -178,11 +178,11 @@ private:
             }
 
             void inc_queue_len() noexcept {
-                _queue_len_metric *= queue_length_factor_base;
+                ++_queue_len_metric;
             }
 
             void dec_queue_len() noexcept {
-                _queue_len_metric = std::max(1.0, _queue_len_metric / queue_length_factor_base);
+                --_queue_len_metric;
             }
 
             void recalculate_value() noexcept {
