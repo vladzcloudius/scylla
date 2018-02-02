@@ -28,63 +28,103 @@
 #include <string>
 #include <tuple>
 #include <cstdlib>
+#include <seastar/http/httpd.hh>
+#include <seastar/net/inet_address.hh>
 
 static boost::filesystem::path test_files_subdir("tests/snitch_property_files");
-static constexpr const char* META_SERVER_URL_ENV = "META_SERVER_URL";
+static constexpr const char* DUMMY_META_SERVER_IP = "DUMMY_META_SERVER_IP";
+static constexpr const char* USE_GCE_META_SERVER = "USE_GCE_META_SERVER";
+
+class gce_meta_get_handler : public seastar::httpd::handler_base {
+    virtual future<std::unique_ptr<seastar::httpd::reply>> handle(const sstring& path, std::unique_ptr<seastar::httpd::request> req, std::unique_ptr<seastar::httpd::reply> rep) override {
+        using namespace seastar::httpd;
+
+        if (path == locator::gce_snitch::ZONE_NAME_QUERY_REQ) {
+            rep->write_body(sstring("txt"), sstring("projects/431729375847/zones/us-central1-a"));
+        } else {
+            rep->set_status(reply::status_type::bad_request);
+        }
+
+        return make_ready_future<std::unique_ptr<reply>>(std::move(rep));
+    }
+};
 
 future<> one_test(const std::string& property_fname, bool exp_result) {
-    using namespace locator;
-    using namespace boost::filesystem;
+    return seastar::async([property_fname, exp_result] () {
+        using namespace locator;
+        using namespace boost::filesystem;
 
-    printf("Testing %s property file: %s\n",
-           (exp_result ? "well-formed" : "ill-formed"),
-           property_fname.c_str());
+        printf("Testing %s property file: %s\n",
+               (exp_result ? "well-formed" : "ill-formed"),
+               property_fname.c_str());
 
-    path fname(test_files_subdir);
-    fname /= path(property_fname);
+        path fname(test_files_subdir);
+        fname /= path(property_fname);
 
-    utils::fb_utilities::set_broadcast_address(gms::inet_address("localhost"));
-    utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address("localhost"));
+        utils::fb_utilities::set_broadcast_address(gms::inet_address("localhost"));
+        utils::fb_utilities::set_broadcast_rpc_address(gms::inet_address("localhost"));
 
-    char* meta_url_env = std::getenv(META_SERVER_URL_ENV);
-    sstring meta_url = locator::gce_snitch::GCE_QUERY_SERVER_ADDR;
-    if (meta_url_env != nullptr) {
-        meta_url = meta_url_env;
-    }
+        char* meta_url_env = std::getenv(DUMMY_META_SERVER_IP);
+        char* use_gce_server = std::getenv(USE_GCE_META_SERVER);
+        bool use_dummy_server = true;
+        sstring meta_url = "127.0.0.1";
 
-    return i_endpoint_snitch::create_snitch<const sstring&, const unsigned&, const sstring&>("GoogleCloudSnitch", sstring(fname.string()), 0, meta_url).then_wrapped([exp_result] (auto&& f) {
+        if (use_gce_server != nullptr) {
+            meta_url = locator::gce_snitch::GCE_QUERY_SERVER_ADDR;
+            use_dummy_server = false;
+        } else if (meta_url_env != nullptr) {
+            meta_url = meta_url_env;
+        }
+
+        httpd::http_server_control http_server;
+
         try {
-            f.get();
+            if (use_dummy_server) {
+                http_server.start("dummy_GCE_meta_server").get();
+                http_server.set_routes([] (routes& r) {
+                    r.put(seastar::httpd::operation_type::GET, locator::gce_snitch::ZONE_NAME_QUERY_REQ, new gce_meta_get_handler());
+                }).get();
+                http_server.listen(ipv4_addr(meta_url.c_str(), 80)).get();
+            }
+
+            i_endpoint_snitch::create_snitch<const sstring&, const unsigned&, const sstring&>("GoogleCloudSnitch", sstring(fname.string()), 0, meta_url).get();
             if (!exp_result) {
                 BOOST_ERROR("Failed to catch an error in a malformed configuration file");
-                return i_endpoint_snitch::stop_snitch();
+                i_endpoint_snitch::stop_snitch().get();
+                if (use_dummy_server) {
+                    http_server.stop().get();
+                }
+                return;
             }
             auto cpu0_dc = make_lw_shared<sstring>();
             auto cpu0_rack = make_lw_shared<sstring>();
             auto res = make_lw_shared<bool>(true);
             auto my_address = utils::fb_utilities::get_broadcast_address();
 
-            return i_endpoint_snitch::snitch_instance().invoke_on(0, [cpu0_dc, cpu0_rack, res, my_address] (snitch_ptr& inst) {
+            i_endpoint_snitch::snitch_instance().invoke_on(0, [cpu0_dc, cpu0_rack, res, my_address] (snitch_ptr& inst) {
                 *cpu0_dc =inst->get_datacenter(my_address);
                 *cpu0_rack = inst->get_rack(my_address);
-            }).then([cpu0_dc, cpu0_rack, res, my_address] {
-                return i_endpoint_snitch::snitch_instance().invoke_on_all([cpu0_dc, cpu0_rack, res, my_address] (snitch_ptr& inst) {
-                    if (*cpu0_dc != inst->get_datacenter(my_address) ||
-                        *cpu0_rack != inst->get_rack(my_address)) {
-                        *res = false;
-                    }
-                }).then([res] {
-                    if (!*res) {
-                        BOOST_ERROR("Data center or Rack do not match on different shards");
-                    } else {
-                        BOOST_CHECK(true);
-                    }
-                    return i_endpoint_snitch::stop_snitch();
-                });
-            });
+            }).get();
+
+            i_endpoint_snitch::snitch_instance().invoke_on_all([cpu0_dc, cpu0_rack, res, my_address] (snitch_ptr& inst) {
+                if (*cpu0_dc != inst->get_datacenter(my_address) ||
+                    *cpu0_rack != inst->get_rack(my_address)) {
+                    *res = false;
+                }
+            }).get();
+
+            if (!*res) {
+                BOOST_ERROR("Data center or Rack do not match on different shards");
+            } else {
+                BOOST_CHECK(true);
+            }
+            i_endpoint_snitch::stop_snitch().get();
         } catch (std::exception& e) {
             BOOST_CHECK(!exp_result);
-            return make_ready_future<>();
+        }
+
+        if (use_dummy_server) {
+            http_server.stop().get();
         }
     });
 }
