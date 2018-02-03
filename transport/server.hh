@@ -113,6 +113,7 @@ private:
         using load_balancer_clock = lowres_clock;
         static const load_balancer_clock::duration load_balancer_period;
         static constexpr unsigned compute_shard_id = 1;
+        static constexpr size_t max_shard_queue_len = 256;
 
         struct balancing_state {
             // Load level above which the local shard will start offloading requests to remote nodes
@@ -186,7 +187,7 @@ private:
             }
 
             void recalculate_value() noexcept {
-                _value = _ewma_latency /* * _queue_len_metric*/;
+                _value = _ewma_latency * _queue_len_metric;
             }
         };
 
@@ -205,10 +206,12 @@ private:
 
     public:
         using latency_clock = std::chrono::steady_clock;
+        using sem_units = semaphore_units<>;
 
         struct request_ctx {
             unsigned cpu;
             size_t budget = 0;
+            stdx::optional<sem_units> units;
             latency_clock::time_point start_time;
             latency_clock::time_point end_time;
         };
@@ -220,6 +223,7 @@ private:
         cql_load_balance _lb;
         stdx::optional<balancing_state> _state; // is initialized only on shard0
         std::vector<shard_metric> _shard_metric;
+        seastar::semaphore _queue_length_limiter;
         // The two below contain the shard IDs of the shards that currently participate in the load balancing on the local shard.
         sorted_shards_type _sorted_shards;
         std::vector<unsigned> _receiving_shards;
@@ -233,7 +237,7 @@ private:
     public:
         load_balancer(distributed<cql_server>& cql_server, cql_load_balance lb);
         future<> stop();
-        request_ctx_ptr pick_request_cpu(size_t initial_budget);
+        future<request_ctx_ptr> pick_request_cpu(size_t initial_budget);
         void mark_request_processing_end(request_ctx_ptr ctx, size_t response_body_size);
         void complete_request_handling(request_ctx_ptr ctx);
         sorted_shards_type::iterator get_sorted_iterator_for_id(unsigned id);
