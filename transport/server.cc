@@ -964,7 +964,7 @@ void cql_server::load_balancer::balancing_state::build_pools() {
             loaders[*max_it].erase(i);
             modified_receivers.insert(*max_it);
             modified_loaders.insert(i);
-            receivers[i].erase(max_it);
+            receivers[i].erase(*max_it);
         }
     }
 
@@ -981,7 +981,7 @@ void cql_server::load_balancer::balancing_state::build_pools() {
                 receivers[*min_it].erase(i);
                 modified_receivers.insert(i);
                 modified_loaders.insert(*min_it);
-                loaders[i].erase(min_it);
+                loaders[i].erase(*min_it);
             }
         }
     }
