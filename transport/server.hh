@@ -181,9 +181,7 @@ private:
 
         struct request_ctx {
             unsigned cpu;
-            size_t budget = 0;
             latency_clock::time_point start_time;
-            latency_clock::time_point end_time;
         };
 
         using request_ctx_ptr = lw_shared_ptr<request_ctx>;
@@ -207,8 +205,7 @@ private:
     public:
         load_balancer(distributed<cql_server>& cql_server, cql_load_balance lb);
         future<> stop();
-        request_ctx_ptr pick_request_cpu(size_t initial_budget);
-        void mark_request_processing_end(request_ctx_ptr ctx, size_t response_body_size);
+        request_ctx_ptr pick_request_cpu(latency_clock::time_point start_time);
         void complete_request_handling(request_ctx_ptr ctx);
         sorted_shards_type::iterator get_sorted_iterator_for_id(unsigned id);
 

@@ -211,10 +211,6 @@ public:
         _flags |= flag;
     }
 
-    size_t body_size() const noexcept {
-        return _body.size();
-    }
-
     scattered_message<char> make_message(uint8_t version);
     void serialize(const event::schema_change& event, uint8_t version);
     void write_byte(uint8_t b);
@@ -696,6 +692,7 @@ future<> cql_server::connection::process_request() {
             tracing_requested = tracing_request_type::no_write_on_close;
         }
 
+        load_balancer::latency_clock::time_point start_time = load_balancer::latency_clock::now();
         auto op = f.opcode;
         auto stream = f.stream;
         auto mem_estimate = f.length * 2 + 8000; // Allow for extra copies and bookkeeping
@@ -711,15 +708,15 @@ future<> cql_server::connection::process_request() {
             ++_server._requests_blocked_memory;
         }
 
-        return fut.then([this, length = f.length, flags = f.flags, op, stream, tracing_requested] (semaphore_units<> mem_permit) {
-          return this->read_and_decompress_frame(length, flags).then([this, flags, op, stream, tracing_requested, mem_permit = std::move(mem_permit)] (temporary_buffer<char> buf) mutable {
+        return fut.then([this, length = f.length, flags = f.flags, op, stream, tracing_requested, start_time] (semaphore_units<> mem_permit) {
+          return this->read_and_decompress_frame(length, flags).then([this, flags, op, stream, tracing_requested, mem_permit = std::move(mem_permit), start_time] (temporary_buffer<char> buf) mutable {
 
             ++_server._requests_served;
             ++_server._requests_serving;
 
-            with_gate(_pending_requests_gate, [this, flags, op, stream, buf = std::move(buf), tracing_requested, mem_permit = std::move(mem_permit)] () mutable {
+            with_gate(_pending_requests_gate, [this, flags, op, stream, buf = std::move(buf), tracing_requested, mem_permit = std::move(mem_permit), start_time] () mutable {
                 auto bv = bytes_view{reinterpret_cast<const int8_t*>(buf.begin()), buf.size()};
-                cql_server::load_balancer::request_ctx_ptr ctx = _server._lbalancer.pick_request_cpu(buf.size() + 1);
+                cql_server::load_balancer::request_ctx_ptr ctx = _server._lbalancer.pick_request_cpu(start_time);
                 return [&] {
                     if (ctx->cpu == engine().cpu_id()) {
                         return process_request_stage(this, bv, op, stream, service::client_state(service::client_state::request_copy_tag{}, _client_state, _client_state.get_timestamp(), &_server), tracing_requested);
@@ -730,11 +727,6 @@ future<> cql_server::connection::process_request() {
                     }
                 }().then([this, flags, ctx] (auto&& response) mutable {
                     update_client_state(response);
-                    // Here we'll record the TS of handling completion and add the size of the response body to the bytes "budget"
-                    // of this request. If request times out (and we don't pass here) it will be heavily penalize the corresponding
-                    // shard by both recording the longer latency in the complete_request_handling() below and by using the shorter
-                    // bytes "budget" for weighing.
-                    _server._lbalancer.mark_request_processing_end(std::move(ctx), response.cql_response->body_size());
                     return this->write_response(std::move(response.cql_response), _compression);
                 }).finally([this, buf = std::move(buf), mem_permit = std::move(mem_permit), ctx] () mutable {
                     // Keep buf alive.
@@ -805,18 +797,14 @@ future<temporary_buffer<char>> cql_server::connection::read_and_decompress_frame
     return _read_buf.read_exactly(length);
 }
 
-cql_server::load_balancer::request_ctx_ptr cql_server::load_balancer::pick_request_cpu(size_t initial_budget) {
+cql_server::load_balancer::request_ctx_ptr cql_server::load_balancer::pick_request_cpu(latency_clock::time_point start_time) {
     lw_shared_ptr<request_ctx> ctx = make_lw_shared<request_ctx>();
 
     if (_lb != cql_load_balance::none) {
-        // FIXME: remove this assert - this is a fast path!
-        assert(initial_budget != 0);
-
         sorted_shards_type::iterator id_it = _sorted_shards.begin();
 
         ctx->cpu = *id_it;
-        ctx->budget = initial_budget;
-        ctx->start_time = latency_clock::now();
+        ctx->start_time = start_time;
 
         rebalance_id(id_it, [this, cpu = *id_it] {
             auto& cur_shard_metrics = _shard_metric[cpu];
@@ -853,27 +841,9 @@ void cql_server::load_balancer::rebalance_id(sorted_shards_type::iterator id_it,
     _sorted_shards.insert(std::move(id_node));
 }
 
-void cql_server::load_balancer::mark_request_processing_end(request_ctx_ptr ctx, size_t response_body_size) {
-    if (_lb != cql_load_balance::none) {
-        ctx->end_time = latency_clock::now();
-        ctx->budget += response_body_size;
-    }
-}
-
 void cql_server::load_balancer::complete_request_handling(cql_server::load_balancer::request_ctx_ptr ctx) {
     if (_lb != cql_load_balance::none) {
-        using namespace std::chrono;
-
-        // If end_time hasn't been set yet (request has failed) - set it now
-        if (ctx->start_time > ctx->end_time) {
-            ctx->end_time = latency_clock::now();
-        }
-
-        // FIXME: remove this assert - it's a fast path!
-        assert(ctx->budget > 0);
-
-        // This value is measured in "nanoseconds per byte" units.
-        latency_clock::duration cur_latency = ctx->end_time - ctx->start_time;
+        latency_clock::duration cur_latency = latency_clock::now() - ctx->start_time;
         _max_latency = std::max(_max_latency, cur_latency);
 
         auto cpu_it = get_sorted_iterator_for_id(ctx->cpu);
