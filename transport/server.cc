@@ -872,6 +872,10 @@ void cql_server::load_balancer::complete_request_handling(cql_server::load_balan
         // FIXME: remove this assert - it's a fast path!
         assert(ctx->budget > 0);
 
+        // This value is measured in "nanoseconds per byte" units.
+        latency_clock::duration cur_latency = ctx->end_time - ctx->start_time;
+        _max_latency = std::max(_max_latency, cur_latency);
+
         auto cpu_it = get_sorted_iterator_for_id(ctx->cpu);
         rebalance_id(cpu_it, [this, cpu = ctx->cpu] {
             auto& cur_shard_metrics = _shard_metric[cpu];
@@ -887,6 +891,7 @@ cql_server::load_balancer::load_balancer(distributed<cql_server>& cql_server, cq
     , _sorted_shards(shards_metric_comp(this->_shard_metric))
     , _loads_collector_timer([this] { collect_loads(); })
     , _load_balance_timer([this] { build_shards_pool(); })
+    , _max_latency(0)
 {
     if (_lb != cql_load_balance::none) {
         // The local shard index should always be present.
@@ -906,6 +911,10 @@ cql_server::load_balancer::load_balancer(distributed<cql_server>& cql_server, cq
     _metrics.add_group("load_balancer", {
             sm::make_gauge("shards_pool_size", [this] { return _sorted_shards.size(); },
                            sm::description("Holds a current number of elements in the shards pool.")),
+            sm::make_gauge("max_latency_us", [this] {
+                                using namespace std::chrono;
+                                return duration_cast<microseconds>(_max_latency).count();
+                           }, sm::description("Holds a maximum latency value seen so far.")),
     });
 
 }
@@ -1073,10 +1082,10 @@ void cql_server::load_balancer::build_shards_pool() {
             std::exchange(_sorted_shards, std::move(new_sorted_shards));
 
 #if 0
-            if (_receiving_shards.size() > 1) {
-                std::for_each(_receiving_shards.begin(), _receiving_shards.end(), [] (unsigned cpu) {
-                    clogger.info("EWMA[{}]: {}, queue_len: {}", cpu, _ewma_latency[cpu], _outstanding_requests[cpu]);
-                });
+            using namespace std::chrono;
+            auto max_latency_ms = duration_cast<microseconds>(_max_latency).count();
+            if (max_latency_ms > 0) {
+                clogger.info("max coordinator latency: {}", max_latency_ms);
             }
 
 #endif

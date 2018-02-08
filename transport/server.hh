@@ -201,6 +201,7 @@ private:
         timer<load_balancer_clock> _loads_collector_timer; // FIXME: rename
         gate _load_balance_timer_gate; // FIXME: rename
         timer<load_balancer_clock> _load_balance_timer; // FIXME: rename
+        latency_clock::duration _max_latency;
         seastar::metrics::metric_groups _metrics;
 
     public:
