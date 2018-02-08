@@ -798,13 +798,12 @@ future<temporary_buffer<char>> cql_server::connection::read_and_decompress_frame
 }
 
 cql_server::load_balancer::request_ctx_ptr cql_server::load_balancer::pick_request_cpu(latency_clock::time_point start_time) {
-    lw_shared_ptr<request_ctx> ctx = make_lw_shared<request_ctx>();
+    lw_shared_ptr<request_ctx> ctx = make_lw_shared<request_ctx>(start_time);
 
     if (_lb != cql_load_balance::none) {
         sorted_shards_type::iterator id_it = _sorted_shards.begin();
 
         ctx->cpu = *id_it;
-        ctx->start_time = start_time;
 
         rebalance_id(id_it, [this, cpu = *id_it] {
             auto& cur_shard_metrics = _shard_metric[cpu];
@@ -842,10 +841,10 @@ void cql_server::load_balancer::rebalance_id(sorted_shards_type::iterator id_it,
 }
 
 void cql_server::load_balancer::complete_request_handling(cql_server::load_balancer::request_ctx_ptr ctx) {
-    if (_lb != cql_load_balance::none) {
-        latency_clock::duration cur_latency = latency_clock::now() - ctx->start_time;
-        _max_latency = std::max(_max_latency, cur_latency);
+    latency_clock::duration cur_latency = latency_clock::now() - ctx->start_time;
+    _max_latency = std::max(_max_latency, cur_latency);
 
+    if (_lb != cql_load_balance::none) {
         auto cpu_it = get_sorted_iterator_for_id(ctx->cpu);
         rebalance_id(cpu_it, [this, cpu = ctx->cpu] {
             auto& cur_shard_metrics = _shard_metric[cpu];

@@ -182,6 +182,7 @@ private:
         struct request_ctx {
             unsigned cpu;
             latency_clock::time_point start_time;
+            explicit request_ctx(latency_clock::time_point t) : start_time(t) {}
         };
 
         using request_ctx_ptr = lw_shared_ptr<request_ctx>;
