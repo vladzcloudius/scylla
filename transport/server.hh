@@ -162,19 +162,19 @@ private:
             // The shard with the lowers metric valus is going to be selected.
             //
             // The metric's formula is: "latency" * queue_length_factor_base^num_outstanding_requests.
-            double _value = min_ewma_latency_val;
+            size_t _value = _queue_len_metric;
 
         public:
-            double value() const noexcept {
+            size_t value() const noexcept {
                 return _value;
             }
 
             void decay_ewma() noexcept {
-                _ewma_latency = std::max((1 - alfa) * _ewma_latency, min_ewma_latency_val);
+                //_ewma_latency = std::max((1 - alfa) * _ewma_latency, min_ewma_latency_val);
             }
 
             void update_ewma(double weighted_latency) {
-                _ewma_latency += alfa * weighted_latency;
+                //_ewma_latency += alfa * weighted_latency;
             }
 
             void inc_queue_len() noexcept {
@@ -186,7 +186,7 @@ private:
             }
 
             void recalculate_value() noexcept {
-                _value = _ewma_latency * _queue_len_metric;
+                _value = /*_ewma_latency * */_queue_len_metric;
             }
         };
 
