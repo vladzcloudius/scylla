@@ -821,7 +821,6 @@ cql_server::load_balancer::request_ctx_ptr cql_server::load_balancer::pick_reque
         rebalance_id(id_it, [this, cpu = *id_it] {
             auto& cur_shard_metrics = _shard_metric[cpu];
             cur_shard_metrics.inc_queue_len();
-            cur_shard_metrics.recalculate_value();
         });
 
         return ctx;
@@ -873,15 +872,10 @@ void cql_server::load_balancer::complete_request_handling(cql_server::load_balan
         // FIXME: remove this assert - it's a fast path!
         assert(ctx->budget > 0);
 
-        // This value is measured in "nanoseconds per byte" units.
-        double weighted_latency = double(duration_cast<nanoseconds>(ctx->end_time - ctx->start_time).count()) / ctx->budget;
         auto cpu_it = get_sorted_iterator_for_id(ctx->cpu);
-        rebalance_id(cpu_it, [this, cpu = ctx->cpu, weighted_latency] {
+        rebalance_id(cpu_it, [this, cpu = ctx->cpu] {
             auto& cur_shard_metrics = _shard_metric[cpu];
-            cur_shard_metrics.decay_ewma();
-            cur_shard_metrics.update_ewma(weighted_latency);
             cur_shard_metrics.dec_queue_len();
-            cur_shard_metrics.recalculate_value();
         });
     }
 }
@@ -1074,13 +1068,6 @@ void cql_server::load_balancer::build_shards_pool() {
         return _cql_server.invoke_on(compute_shard_id, [idx = engine().cpu_id()] (cql_server& s) {
             return s._lbalancer.get_pool(idx);
         }).then([this] (std::vector<unsigned> new_shards_pool) {
-            // Decay the EWMA latency of all involved shards for each served packet. This way we will ensure that all shards
-            // will eventually start participating - even the slowest among them. Otherwise the slow shards would never be chosen.
-            std::for_each(_shard_metric.begin(), _shard_metric.end(), [] (shard_metric& sm) {
-                sm.decay_ewma();
-                sm.recalculate_value();
-            });
-
             std::exchange(_receiving_shards, new_shards_pool);
             std::multiset<unsigned, shards_metric_comp> new_sorted_shards(_receiving_shards.begin(), _receiving_shards.end(), shards_metric_comp(this->_shard_metric));
             std::exchange(_sorted_shards, std::move(new_sorted_shards));

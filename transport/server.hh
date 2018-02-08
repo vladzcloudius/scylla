@@ -146,35 +146,12 @@ private:
 
         class shard_metric {
         private:
-            // The smallest positive double value. We don't want the ewma value to become zero.
-            static constexpr double min_ewma_latency_val = std::numeric_limits<double>::min();
-            // Exponential decay parameter
-            static constexpr double alfa = 0.25;
-            // Increase the metric by 1% for each 100 outstanding requests
-            static constexpr double queue_length_factor_base = 1.0001;
-
-        private:
-            // Contains the EWMA latency for the corresponding shard in the system from the point of view of the local shard.
-            double _ewma_latency = min_ewma_latency_val;
             // The metric that depends on the current queue length: queue_length_factor_base^N, when N is a current queue length.
-            size_t _queue_len_metric = 1;
-            // This is a synthetic metric that is used for selecting the shard to process the next request.
-            // The shard with the lowers metric valus is going to be selected.
-            //
-            // The metric's formula is: "latency" * queue_length_factor_base^num_outstanding_requests.
-            size_t _value = _queue_len_metric;
+            size_t _queue_len_metric = 0;
 
         public:
-            size_t value() const noexcept {
-                return _value;
-            }
-
-            void decay_ewma() noexcept {
-                //_ewma_latency = std::max((1 - alfa) * _ewma_latency, min_ewma_latency_val);
-            }
-
-            void update_ewma(double weighted_latency) {
-                //_ewma_latency += alfa * weighted_latency;
+            const size_t& value() const noexcept {
+                return _queue_len_metric;
             }
 
             void inc_queue_len() noexcept {
@@ -183,10 +160,6 @@ private:
 
             void dec_queue_len() noexcept {
                 --_queue_len_metric;
-            }
-
-            void recalculate_value() noexcept {
-                _value = /*_ewma_latency * */_queue_len_metric;
             }
         };
 
