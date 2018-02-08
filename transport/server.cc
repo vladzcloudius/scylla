@@ -719,28 +719,27 @@ future<> cql_server::connection::process_request() {
 
             with_gate(_pending_requests_gate, [this, flags, op, stream, buf = std::move(buf), tracing_requested, mem_permit = std::move(mem_permit)] () mutable {
                 auto bv = bytes_view{reinterpret_cast<const int8_t*>(buf.begin()), buf.size()};
-                return _server._lbalancer.pick_request_cpu(buf.size() + 1).then([this, bv = std::move(bv), buf = std::move(buf), mem_permit = std::move(mem_permit), op, stream, tracing_requested, flags] (cql_server::load_balancer::request_ctx_ptr ctx) mutable {
-                    return [&] {
-                        if (ctx->cpu == engine().cpu_id()) {
-                            return process_request_stage(this, bv, op, stream, service::client_state(service::client_state::request_copy_tag{}, _client_state, _client_state.get_timestamp(), &_server), tracing_requested);
-                        } else {
-                            return smp::submit_to(ctx->cpu, [this, bv = std::move(bv), op, stream, client_state = _client_state, tracing_requested, ts = _client_state.get_timestamp()] () mutable {
-                                return process_request_stage(this, bv, op, stream, service::client_state(service::client_state::request_copy_tag{}, client_state, ts, &_distributed_server.local()), tracing_requested);
-                            });
-                        }
-                    }().then([this, flags, ctx] (auto&& response) mutable {
-                        update_client_state(response);
-                        // Here we'll record the TS of handling completion and add the size of the response body to the bytes "budget"
-                        // of this request. If request times out (and we don't pass here) it will be heavily penalize the corresponding
-                        // shard by both recording the longer latency in the complete_request_handling() below and by using the shorter
-                        // bytes "budget" for weighing.
-                        _server._lbalancer.mark_request_processing_end(std::move(ctx), response.cql_response->body_size());
-                        return this->write_response(std::move(response.cql_response), _compression);
-                    }).finally([this, buf = std::move(buf), mem_permit = std::move(mem_permit), ctx] () mutable {
-                        // Keep buf alive.
-                        --_server._requests_serving;
-                        _server._lbalancer.complete_request_handling(std::move(ctx));
-                    });
+                cql_server::load_balancer::request_ctx_ptr ctx = _server._lbalancer.pick_request_cpu(buf.size() + 1);
+                return [&] {
+                    if (ctx->cpu == engine().cpu_id()) {
+                        return process_request_stage(this, bv, op, stream, service::client_state(service::client_state::request_copy_tag{}, _client_state, _client_state.get_timestamp(), &_server), tracing_requested);
+                    } else {
+                        return smp::submit_to(ctx->cpu, [this, bv = std::move(bv), op, stream, client_state = _client_state, tracing_requested, ts = _client_state.get_timestamp()] () mutable {
+                            return process_request_stage(this, bv, op, stream, service::client_state(service::client_state::request_copy_tag{}, client_state, ts, &_distributed_server.local()), tracing_requested);
+                        });
+                    }
+                }().then([this, flags, ctx] (auto&& response) mutable {
+                    update_client_state(response);
+                    // Here we'll record the TS of handling completion and add the size of the response body to the bytes "budget"
+                    // of this request. If request times out (and we don't pass here) it will be heavily penalize the corresponding
+                    // shard by both recording the longer latency in the complete_request_handling() below and by using the shorter
+                    // bytes "budget" for weighing.
+                    _server._lbalancer.mark_request_processing_end(std::move(ctx), response.cql_response->body_size());
+                    return this->write_response(std::move(response.cql_response), _compression);
+                }).finally([this, buf = std::move(buf), mem_permit = std::move(mem_permit), ctx] () mutable {
+                    // Keep buf alive.
+                    --_server._requests_serving;
+                    _server._lbalancer.complete_request_handling(std::move(ctx));
                 });
             }).handle_exception([] (std::exception_ptr ex) {
                 clogger.error("request processing failed: {}", ex);
@@ -806,33 +805,30 @@ future<temporary_buffer<char>> cql_server::connection::read_and_decompress_frame
     return _read_buf.read_exactly(length);
 }
 
-future<cql_server::load_balancer::request_ctx_ptr> cql_server::load_balancer::pick_request_cpu(size_t initial_budget) {
+cql_server::load_balancer::request_ctx_ptr cql_server::load_balancer::pick_request_cpu(size_t initial_budget) {
     lw_shared_ptr<request_ctx> ctx = make_lw_shared<request_ctx>();
+
     if (_lb != cql_load_balance::none) {
-        return get_units(_queue_length_limiter, 1).then([this, initial_budget, ctx = std::move(ctx)] (semaphore_units<> units) mutable {
+        // FIXME: remove this assert - this is a fast path!
+        assert(initial_budget != 0);
 
-            // FIXME: remove this assert - this is a fast path!
-            assert(initial_budget != 0);
+        sorted_shards_type::iterator id_it = _sorted_shards.begin();
 
-            sorted_shards_type::iterator id_it = _sorted_shards.begin();
+        ctx->cpu = *id_it;
+        ctx->budget = initial_budget;
+        ctx->start_time = latency_clock::now();
 
-            ctx->cpu = *id_it;
-            ctx->budget = initial_budget;
-            ctx->start_time = latency_clock::now();
-            ctx->units.emplace(std::move(units));
-
-            rebalance_id(id_it, [this, cpu = *id_it] {
-                auto& cur_shard_metrics = _shard_metric[cpu];
-                cur_shard_metrics.inc_queue_len();
-                cur_shard_metrics.recalculate_value();
-            });
-
-            return make_ready_future<request_ctx_ptr>(std::move(ctx));
+        rebalance_id(id_it, [this, cpu = *id_it] {
+            auto& cur_shard_metrics = _shard_metric[cpu];
+            cur_shard_metrics.inc_queue_len();
+            cur_shard_metrics.recalculate_value();
         });
+
+        return ctx;
     }
 
     ctx->cpu = engine().cpu_id();
-    return make_ready_future<request_ctx_ptr>(std::move(ctx));
+    return ctx;
 }
 
 cql_server::load_balancer::sorted_shards_type::iterator cql_server::load_balancer::get_sorted_iterator_for_id(unsigned id) {
@@ -894,7 +890,6 @@ cql_server::load_balancer::load_balancer(distributed<cql_server>& cql_server, cq
     : _cql_server(cql_server)
     , _lb((smp::count > 1) ? lb : cql_load_balance::none)
     , _shard_metric(smp::count)
-    , _queue_length_limiter(max_shard_queue_len)
     , _sorted_shards(shards_metric_comp(this->_shard_metric))
     , _loads_collector_timer([this] { collect_loads(); })
     , _load_balance_timer([this] { build_shards_pool(); })
