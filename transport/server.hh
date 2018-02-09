@@ -136,11 +136,14 @@ private:
                 return (rates[cpu] * 3) / 4 < avg_rate;
             }
             std::vector<unsigned> get_pool(unsigned idx) const {
-                auto& receivers_idx = receivers;
-                std::vector<unsigned> shards_pool(receivers_idx.size() + 1);
+                std::vector<unsigned> shards_pool(receivers.size() + 1);
                 shards_pool.clear();
                 shards_pool.push_back(idx);
-                std::copy(receivers_idx.begin(), receivers_idx.end(), std::back_inserter(shards_pool));
+
+                if (std::find(receivers.begin(), receivers.end(), idx) == receivers.end()) {
+                    std::copy(receivers.begin(), receivers.end(), std::back_inserter(shards_pool));
+                }
+
                 return shards_pool;
             }
         };
