@@ -803,6 +803,10 @@ cql_server::load_balancer::request_ctx_ptr cql_server::load_balancer::pick_reque
     if (_lb != cql_load_balance::none) {
         sorted_shards_type::iterator id_it = _sorted_shards.begin();
 
+        if (_shard_metric[*id_it].value() == _shard_metric[engine().cpu_id()].value()) {
+            id_it = get_sorted_iterator_for_id(engine().cpu_id());
+        }
+
         ctx->cpu = *id_it;
 
         rebalance_id(id_it, [this, cpu = *id_it] {
@@ -858,22 +862,24 @@ cql_server::load_balancer::load_balancer(distributed<cql_server>& cql_server, cq
     , _lb((smp::count > 1) ? lb : cql_load_balance::none)
     , _shard_metric(smp::count)
     , _sorted_shards(shards_metric_comp(this->_shard_metric))
-    , _loads_collector_timer([this] { collect_loads(); })
-    , _load_balance_timer([this] { build_shards_pool(); })
+//    , _loads_collector_timer([this] { collect_loads(); })
+//    , _load_balance_timer([this] { build_shards_pool(); })
     , _max_latency(0)
 {
     if (_lb != cql_load_balance::none) {
-        // The local shard index should always be present.
-        _sorted_shards.insert(engine().cpu_id());
-        _receiving_shards.push_back(engine().cpu_id());
-
-        // Start loads collector on a compute shard - the rest of the shards are going to read them from it.
-        if (engine().cpu_id() == compute_shard_id) {
-            _state = balancing_state();
-            _loads_collector_timer.arm(load_balancer_period);
+        // Fill all shards in
+        for (unsigned i = 0; i < smp::count; ++i) {
+            _sorted_shards.insert(i);
         }
+//        _receiving_shards.push_back(engine().cpu_id());
 
-        _load_balance_timer.arm(load_balancer_period);
+//        // Start loads collector on a compute shard - the rest of the shards are going to read them from it.
+//        if (engine().cpu_id() == compute_shard_id) {
+//            _state = balancing_state();
+//            _loads_collector_timer.arm(load_balancer_period);
+//        }
+//
+//        _load_balance_timer.arm(load_balancer_period);
     }
 
     namespace sm = seastar::metrics;
