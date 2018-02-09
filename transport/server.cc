@@ -52,6 +52,7 @@
 
 #include <cassert>
 #include <string>
+#include <numeric>
 
 #include <snappy-c.h>
 #include <lz4.h>
@@ -805,6 +806,7 @@ cql_server::load_balancer::request_ctx_ptr cql_server::load_balancer::pick_reque
 
         ctx->cpu = *id_it;
 
+        inc_last_rate();
         rebalance_id(id_it, [this, cpu = *id_it] {
             auto& cur_shard_metrics = _shard_metric[cpu];
             cur_shard_metrics.inc_queue_len();
@@ -827,6 +829,16 @@ cql_server::load_balancer::sorted_shards_type::iterator cql_server::load_balance
     }
 
     return _sorted_shards.end();
+}
+
+size_t cql_server::load_balancer::get_last_rate() noexcept {
+    size_t tmp = _last_rate;
+    _last_rate = 0;
+    return tmp;
+}
+
+void cql_server::load_balancer::inc_last_rate() noexcept {
+    ++_last_rate;
 }
 
 template <class Func>
@@ -891,9 +903,9 @@ cql_server::load_balancer::load_balancer(distributed<cql_server>& cql_server, cq
 void cql_server::load_balancer::collect_loads() {
     with_gate(_loads_collector_timer_gate, [this] {
         return _cql_server.map([] (cql_server& s) {
-            return engine().get_load();
-        }).then([this] (std::vector<double> new_loads) {
-            std::exchange(_state->loads, std::move(new_loads));
+            return s._lbalancer.get_last_rate();
+        }).then([this] (std::vector<size_t> new_rates) {
+            std::exchange(_state->rates, std::move(new_rates));
             _state->build_pools();
         }).finally([this] {
             _loads_collector_timer.arm(load_balancer_period);
@@ -904,6 +916,20 @@ void cql_server::load_balancer::collect_loads() {
 // TODO: move the small operations into helper methods
 // TODO: make sure the original state is preserved if some of the allocations below fails
 void cql_server::load_balancer::balancing_state::build_pools() {
+    size_t avg_rate = std::accumulate(rates.begin(), rates.end(), 0) / rates.size();
+
+    std::vector<unsigned> new_receivers;
+    new_receivers.reserve(smp::count);
+    for (unsigned cpu = 0; cpu < smp::count; ++cpu) {
+        if (can_accept_more_load(avg_rate, cpu)) {
+            new_receivers.push_back(cpu);
+        }
+    }
+
+    std::exchange(receivers, new_receivers);
+
+
+#if 0
     // Remember all potential senders: loaded above start_offload_threshold and not receivers.
     // We want to learn them here in order to prevent the receivers from turning into senders
     // in the same balancing period. We don't want this because the receivers may have a high load
@@ -1011,7 +1037,7 @@ void cql_server::load_balancer::balancing_state::build_pools() {
             }
         }
     }
-
+#endif
 #if 0
     // FIXME: debug prints
     printf("Receivers:\n");

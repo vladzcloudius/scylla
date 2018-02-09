@@ -116,26 +116,27 @@ private:
 
         struct balancing_state {
             // Load level above which the local shard will start offloading requests to remote nodes
-            static constexpr double start_offload_threshold = 0.25; // corresponds to the load of 75%
+//            static constexpr double start_offload_threshold = 0.25; // corresponds to the load of 75%
             // Load when we want to start removing senders from the shard's loaders.
-            static constexpr double start_backoff_threshold = 0.05; // corresponds to the load of 95%
+//            static constexpr double start_backoff_threshold = 0.05; // corresponds to the load of 95%
 
-            std::vector<double> loads;
-            std::vector<std::unordered_set<unsigned>> loaders;
-            std::vector<std::unordered_set<unsigned>> receivers;
+            std::vector<size_t> rates;
+//            std::vector<std::unordered_set<unsigned>> loaders;
+//            std::vector<std::unordered_set<unsigned>> receivers;
+            std::vector<unsigned> receivers;
 
             balancing_state()
-                : loads(smp::count, 1.0)
-                , loaders(smp::count)
-                , receivers(smp::count)
+                : rates(smp::count, 0)
+//                , loaders(smp::count)
+//                , receivers(smp::count)
             {}
 
             void build_pools();
-            bool can_accept_more_load(unsigned idx) {
-                return loads[idx] > start_offload_threshold && receivers[idx].empty();
+            bool can_accept_more_load(size_t avg_rate, unsigned cpu) {
+                return (rates[cpu] * 3) / 4 < avg_rate;
             }
             std::vector<unsigned> get_pool(unsigned idx) const {
-                auto& receivers_idx = receivers[idx];
+                auto& receivers_idx = receivers;
                 std::vector<unsigned> shards_pool(receivers_idx.size() + 1);
                 shards_pool.clear();
                 shards_pool.push_back(idx);
@@ -192,6 +193,7 @@ private:
         cql_load_balance _lb;
         stdx::optional<balancing_state> _state; // is initialized only on shard0
         std::vector<shard_metric> _shard_metric;
+        size_t _last_rate = 0;
         // The two below contain the shard IDs of the shards that currently participate in the load balancing on the local shard.
         sorted_shards_type _sorted_shards;
         std::vector<unsigned> _receiving_shards;
@@ -209,6 +211,8 @@ private:
         request_ctx_ptr pick_request_cpu(latency_clock::time_point start_time);
         void complete_request_handling(request_ctx_ptr ctx);
         sorted_shards_type::iterator get_sorted_iterator_for_id(unsigned id);
+        size_t get_last_rate() noexcept;
+        void inc_last_rate() noexcept;
 
         /// \brief Rebalance the element pointed by the given iterator.
         /// \note \ref id_it is going to become invalid after the call.
