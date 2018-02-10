@@ -52,6 +52,7 @@
 
 #include <cassert>
 #include <string>
+#include <numeric>
 
 #include <snappy-c.h>
 #include <lz4.h>
@@ -801,15 +802,30 @@ cql_server::load_balancer::request_ctx_ptr cql_server::load_balancer::pick_reque
     lw_shared_ptr<request_ctx> ctx = make_lw_shared<request_ctx>(start_time);
 
     if (_lb != cql_load_balance::none) {
+        ctx->cpu = _next_cpu->first;
+        if (--_next_cpu->second == 0) {
+            _next_cpu = _current_working_shards.erase(_next_cpu);
+            if (_current_working_shards.empty()) {
+                _current_working_shards = _receiving_shards;
+                _next_cpu = _current_working_shards.begin();
+            }
+        } else {
+            ++_next_cpu;
+            if (_next_cpu == _current_working_shards.end()) {
+                _next_cpu = _current_working_shards.begin();
+            }
+        }
+#if 0
         sorted_shards_type::iterator id_it = _sorted_shards.begin();
 
         ctx->cpu = *id_it;
 
+        inc_last_rate();
         rebalance_id(id_it, [this, cpu = *id_it] {
             auto& cur_shard_metrics = _shard_metric[cpu];
             cur_shard_metrics.inc_queue_len();
         });
-
+#endif
         return ctx;
     }
 
@@ -817,55 +833,67 @@ cql_server::load_balancer::request_ctx_ptr cql_server::load_balancer::pick_reque
     return ctx;
 }
 
-cql_server::load_balancer::sorted_shards_type::iterator cql_server::load_balancer::get_sorted_iterator_for_id(unsigned id) {
-    // find the iterator for the give shard - there may be more than one elements with the same Compare(id).
-    auto eq_range = _sorted_shards.equal_range(id);
-    for (auto it = eq_range.first; it != eq_range.second; ++it) {
-        if (*it == id) {
-            return it;
-        }
-    }
+//cql_server::load_balancer::sorted_shards_type::iterator cql_server::load_balancer::get_sorted_iterator_for_id(unsigned id) {
+//    // find the iterator for the give shard - there may be more than one elements with the same Compare(id).
+//    auto eq_range = _sorted_shards.equal_range(id);
+//    for (auto it = eq_range.first; it != eq_range.second; ++it) {
+//        if (*it == id) {
+//            return it;
+//        }
+//    }
+//
+//    return _sorted_shards.end();
+//}
 
-    return _sorted_shards.end();
+size_t cql_server::load_balancer::get_last_rate() noexcept {
+    size_t tmp = _last_rate;
+    _last_rate = 0;
+    return tmp;
 }
 
-template <class Func>
-void cql_server::load_balancer::rebalance_id(sorted_shards_type::iterator id_it, Func&& metric_updater) {
-    if (id_it == _sorted_shards.end()) {
-        metric_updater();
-        return;
-    }
-    auto id_node = _sorted_shards.extract(id_it);
-    metric_updater();
-    _sorted_shards.insert(std::move(id_node));
+void cql_server::load_balancer::inc_last_rate() noexcept {
+    ++_last_rate;
 }
+
+//template <class Func>
+//void cql_server::load_balancer::rebalance_id(sorted_shards_type::iterator id_it, Func&& metric_updater) {
+//    if (id_it == _sorted_shards.end()) {
+//        metric_updater();
+//        return;
+//    }
+//    auto id_node = _sorted_shards.extract(id_it);
+//    metric_updater();
+//    _sorted_shards.insert(std::move(id_node));
+//}
 
 void cql_server::load_balancer::complete_request_handling(cql_server::load_balancer::request_ctx_ptr ctx) {
     latency_clock::duration cur_latency = latency_clock::now() - ctx->start_time;
     _max_latency = std::max(_max_latency, cur_latency);
 
-    if (_lb != cql_load_balance::none) {
-        auto cpu_it = get_sorted_iterator_for_id(ctx->cpu);
-        rebalance_id(cpu_it, [this, cpu = ctx->cpu] {
-            auto& cur_shard_metrics = _shard_metric[cpu];
-            cur_shard_metrics.dec_queue_len();
-        });
-    }
+//    if (_lb != cql_load_balance::none) {
+//        auto cpu_it = get_sorted_iterator_for_id(ctx->cpu);
+//        rebalance_id(cpu_it, [this, cpu = ctx->cpu] {
+//            auto& cur_shard_metrics = _shard_metric[cpu];
+//            cur_shard_metrics.dec_queue_len();
+//        });
+//    }
 }
 
 cql_server::load_balancer::load_balancer(distributed<cql_server>& cql_server, cql_load_balance lb)
     : _cql_server(cql_server)
     , _lb((smp::count > 1) ? lb : cql_load_balance::none)
     , _shard_metric(smp::count)
-    , _sorted_shards(shards_metric_comp(this->_shard_metric))
+//    , _sorted_shards(shards_metric_comp(this->_shard_metric))
     , _loads_collector_timer([this] { collect_loads(); })
     , _load_balance_timer([this] { build_shards_pool(); })
     , _max_latency(0)
 {
     if (_lb != cql_load_balance::none) {
         // The local shard index should always be present.
-        _sorted_shards.insert(engine().cpu_id());
-        _receiving_shards.push_back(engine().cpu_id());
+//        _sorted_shards.insert(engine().cpu_id());
+        _receiving_shards[engine().cpu_id()] = 1000;
+        _current_working_shards = _receiving_shards;
+        _next_cpu = _current_working_shards.begin();
 
         // Start loads collector on a compute shard - the rest of the shards are going to read them from it.
         if (engine().cpu_id() == compute_shard_id) {
@@ -878,7 +906,7 @@ cql_server::load_balancer::load_balancer(distributed<cql_server>& cql_server, cq
 
     namespace sm = seastar::metrics;
     _metrics.add_group("load_balancer", {
-            sm::make_gauge("shards_pool_size", [this] { return _sorted_shards.size(); },
+            sm::make_gauge("shards_pool_size", [this] { return _receiving_shards.size(); },
                            sm::description("Holds a current number of elements in the shards pool.")),
             sm::make_gauge("max_latency_us", [this] {
                                 using namespace std::chrono;
@@ -891,9 +919,9 @@ cql_server::load_balancer::load_balancer(distributed<cql_server>& cql_server, cq
 void cql_server::load_balancer::collect_loads() {
     with_gate(_loads_collector_timer_gate, [this] {
         return _cql_server.map([] (cql_server& s) {
-            return engine().get_load();
-        }).then([this] (std::vector<double> new_loads) {
-            std::exchange(_state->loads, std::move(new_loads));
+            return s._lbalancer.get_last_rate();
+        }).then([this] (std::vector<size_t> new_rates) {
+            std::exchange(_state->rates, std::move(new_rates));
             _state->build_pools();
         }).finally([this] {
             _loads_collector_timer.arm(load_balancer_period);
@@ -904,6 +932,83 @@ void cql_server::load_balancer::collect_loads() {
 // TODO: move the small operations into helper methods
 // TODO: make sure the original state is preserved if some of the allocations below fails
 void cql_server::load_balancer::balancing_state::build_pools() {
+    size_t avg_rate = std::accumulate(rates.begin(), rates.end(), 0) / rates.size();
+
+    std::vector<unsigned> new_receivers;
+    new_receivers.reserve(smp::count);
+    std::vector<unsigned> new_donors;
+    new_donors.reserve(smp::count);
+
+    // learn all potential receivers and remember the rate of the shard itself
+    for (unsigned cpu = 0; cpu < smp::count; ++cpu) {
+        auto& receivers_cpu = receivers[cpu];
+        receivers_cpu.clear();
+        receivers_cpu[cpu] = rates[cpu];
+
+        if (can_accept_more_load(avg_rate, cpu)) {
+            new_receivers.push_back(cpu);
+        } else {
+            new_donors.push_back(cpu);
+        }
+    }
+
+    // fill the receivers list and fill the delta for each donor
+    int last_donor_idx = -1;
+    size_t budget_left_at_last_donor = 0;
+    for(unsigned rcpu : new_receivers)  {
+        size_t budget_left = avg_rate - rates[rcpu];
+        if (budget_left_at_last_donor) {
+            unsigned last_donor = new_donors[last_donor_idx];
+            auto& last_donor_receivers = receivers[last_donor];
+
+            if (budget_left <= budget_left_at_last_donor) {
+                last_donor_receivers[rcpu] = budget_left;
+                last_donor_receivers[last_donor] -= budget_left;
+                budget_left_at_last_donor -= budget_left;
+                budget_left = 0;
+            } else {
+                last_donor_receivers[rcpu] = budget_left_at_last_donor;
+                last_donor_receivers[last_donor] -= budget_left_at_last_donor;
+                budget_left -= budget_left_at_last_donor;
+                budget_left_at_last_donor = 0;
+            }
+        }
+
+        // if we are done with this receiver - go to the next one
+        if (!budget_left) {
+            continue;
+        }
+
+        // If we are done with the last donor - go to the next one
+        if (!budget_left_at_last_donor) {
+            ++last_donor_idx;
+        }
+
+        for (int i = last_donor_idx; i < new_donors.size(); ++i) {
+            unsigned current_donor = new_donors[i];
+
+            if (!budget_left_at_last_donor) {
+                budget_left_at_last_donor = rates[current_donor] - avg_rate;
+            }
+
+            auto& current_donor_receivers = receivers[current_donor];
+
+            if (budget_left <= budget_left_at_last_donor) {
+                current_donor_receivers[rcpu] = budget_left;
+                current_donor_receivers[current_donor] -= budget_left;
+                budget_left_at_last_donor -= budget_left;
+                last_donor_idx = i;
+                break;
+            } else {
+                current_donor_receivers[rcpu] = budget_left_at_last_donor;
+                current_donor_receivers[current_donor] -= budget_left_at_last_donor;
+                budget_left -= budget_left_at_last_donor;
+                budget_left_at_last_donor = 0;
+            }
+        }
+    }
+
+#if 0
     // Remember all potential senders: loaded above start_offload_threshold and not receivers.
     // We want to learn them here in order to prevent the receivers from turning into senders
     // in the same balancing period. We don't want this because the receivers may have a high load
@@ -1011,7 +1116,7 @@ void cql_server::load_balancer::balancing_state::build_pools() {
             }
         }
     }
-
+#endif
 #if 0
     // FIXME: debug prints
     printf("Receivers:\n");
@@ -1045,10 +1150,10 @@ void cql_server::load_balancer::build_shards_pool() {
         // get the "loads" vector from shard0
         return _cql_server.invoke_on(compute_shard_id, [idx = engine().cpu_id()] (cql_server& s) {
             return s._lbalancer.get_pool(idx);
-        }).then([this] (std::vector<unsigned> new_shards_pool) {
+        }).then([this] (std::unordered_map<unsigned, size_t> new_shards_pool) {
             std::exchange(_receiving_shards, new_shards_pool);
-            std::multiset<unsigned, shards_metric_comp> new_sorted_shards(_receiving_shards.begin(), _receiving_shards.end(), shards_metric_comp(this->_shard_metric));
-            std::exchange(_sorted_shards, std::move(new_sorted_shards));
+//            std::multiset<unsigned, shards_metric_comp> new_sorted_shards(_receiving_shards.begin(), _receiving_shards.end(), shards_metric_comp(this->_shard_metric));
+//            std::exchange(_sorted_shards, std::move(new_sorted_shards));
 
 #if 0
             using namespace std::chrono;
