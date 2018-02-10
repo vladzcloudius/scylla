@@ -802,6 +802,7 @@ cql_server::load_balancer::request_ctx_ptr cql_server::load_balancer::pick_reque
     lw_shared_ptr<request_ctx> ctx = make_lw_shared<request_ctx>(start_time);
 
     if (_lb != cql_load_balance::none) {
+        inc_last_rate();
         ctx->cpu = _next_cpu->first;
         if (--_next_cpu->second == 0) {
             _next_cpu = _current_working_shards.erase(_next_cpu);
@@ -811,9 +812,10 @@ cql_server::load_balancer::request_ctx_ptr cql_server::load_balancer::pick_reque
             }
         } else {
             ++_next_cpu;
-            if (_next_cpu == _current_working_shards.end()) {
-                _next_cpu = _current_working_shards.begin();
-            }
+        }
+
+        if (_next_cpu == _current_working_shards.end()) {
+            _next_cpu = _current_working_shards.begin();
         }
 #if 0
         sorted_shards_type::iterator id_it = _sorted_shards.begin();
@@ -943,11 +945,17 @@ void cql_server::load_balancer::balancing_state::build_pools() {
     for (unsigned cpu = 0; cpu < smp::count; ++cpu) {
         auto& receivers_cpu = receivers[cpu];
         receivers_cpu.clear();
-        receivers_cpu[cpu] = rates[cpu];
 
         if (can_accept_more_load(avg_rate, cpu)) {
             new_receivers.push_back(cpu);
+            receivers_cpu[cpu] = 1000; // Receivers "receivers" map is going to consist only of a single entry for the shard itself
         } else {
+            if (avg_rate == 0) {
+                // for the idle state - set the dummy rate
+                receivers_cpu[cpu] = 1000;
+            } else {
+                receivers_cpu[cpu] = rates[cpu];
+            }
             new_donors.push_back(cpu);
         }
     }
@@ -1152,6 +1160,8 @@ void cql_server::load_balancer::build_shards_pool() {
             return s._lbalancer.get_pool(idx);
         }).then([this] (std::unordered_map<unsigned, size_t> new_shards_pool) {
             std::exchange(_receiving_shards, new_shards_pool);
+            _current_working_shards = _receiving_shards;
+            _next_cpu = _current_working_shards.begin();
 //            std::multiset<unsigned, shards_metric_comp> new_sorted_shards(_receiving_shards.begin(), _receiving_shards.end(), shards_metric_comp(this->_shard_metric));
 //            std::exchange(_sorted_shards, std::move(new_sorted_shards));
 
