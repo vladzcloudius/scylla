@@ -59,10 +59,11 @@ if [ ! -e dist/redhat/build_rpm.sh ]; then
     exit 1
 fi
 
-if [ "$(arch)" != "x86_64" ]; then
-    echo "Unsupported architecture: $(arch)"
-    exit 1
-fi
+#if [ "$(arch)" != "x86_64" ]; then
+#    echo "Unsupported architecture: $(arch)"
+#    exit 1
+#fi
+
 if [ -z "$TARGET" ]; then
     if [ "$ID" = "centos" -o "$ID" = "rhel" ] && [ "$VERSION_ID" = "7" ]; then
         TARGET=epel-7-x86_64
@@ -104,9 +105,11 @@ fi
 if [ $JOBS -gt 0 ]; then
     SRPM_OPTS="$SRPM_OPTS --define='_smp_mflags -j$JOBS'"
 fi
+echo "before building srpm: TARGET=$TARGET"
 sudo mock --buildsrpm --root=$TARGET --resultdir=`pwd`/build/srpms --spec=build/scylla.spec --sources=build/scylla-$VERSION.tar $SRPM_OPTS
-if [ "$TARGET" = "epel-7-x86_64" ]; then
+if [ "$TARGET" = "epel-7-aarch64" ]; then
     TARGET=scylla-$TARGET
     RPM_OPTS="$RPM_OPTS --configdir=dist/redhat/mock"
 fi
+echo "before building RPM"
 sudo mock --rebuild --root=$TARGET --resultdir=`pwd`/build/rpms $RPM_OPTS build/srpms/scylla-$VERSION*.src.rpm
