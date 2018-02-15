@@ -129,7 +129,9 @@ private:
                 : rates(smp::count, 0)
 //                , loaders(smp::count)
                 , receivers(smp::count)
-            {}
+            {
+                build_pools();
+            }
 
             void build_pools();
             bool can_accept_more_load(size_t avg_rate, unsigned cpu) {
