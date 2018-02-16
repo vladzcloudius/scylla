@@ -817,6 +817,14 @@ cql_server::load_balancer::request_ctx_ptr cql_server::load_balancer::pick_reque
     return ctx;
 }
 
+std::vector<size_t> cql_server::load_balancer::get_processed() {
+    std::vector<size_t> processed(_shard_metric.size());
+    processed.clear();
+    std::transform(_shard_metric.begin(), _shard_metric.end(), std::back_inserter(processed), [] (shard_metric& sm) { return sm.get_processed(); });
+
+    return processed;
+}
+
 cql_server::load_balancer::sorted_shards_type::iterator cql_server::load_balancer::get_sorted_iterator_for_id(unsigned id) {
     // find the iterator for the give shard - there may be more than one elements with the same Compare(id).
     auto eq_range = _sorted_shards.equal_range(id);
@@ -894,7 +902,12 @@ void cql_server::load_balancer::collect_loads() {
             return engine().get_load();
         }).then([this] (std::vector<double> new_loads) {
             std::exchange(_state->loads, std::move(new_loads));
-            _state->build_pools();
+            return _cql_server.map([] (cql_server& s) {
+                return s._lbalancer.get_processed();
+            }).then([this] (std::vector<std::vector<size_t>> new_processed) {
+                std::exchange(_state->processed, std::move(new_processed));
+                _state->build_pools();
+            });
         }).finally([this] {
             _loads_collector_timer.arm(load_balancer_period);
         });
@@ -917,7 +930,7 @@ void cql_server::load_balancer::balancing_state::build_pools() {
         }
     }
 
-    // First remove one least loaded receiver from the loaders that are not loaded anymore...
+    // First remove one receiver that processed the least amount of requests from the loaders that are not loaded anymore...
     std::unordered_set<unsigned> modified_receivers;
     std::unordered_set<unsigned> modified_loaders;
 
@@ -927,7 +940,7 @@ void cql_server::load_balancer::balancing_state::build_pools() {
         std::for_each(modified_receivers.begin(), modified_receivers.end(), [&shard_i_receivers] (unsigned id) { shard_i_receivers.erase(id); });
 
         if (!shard_i_receivers.empty() && loads[i] > (start_offload_threshold * double(shard_i_receivers.size()) + 1) / double(shard_i_receivers.size() + 1)) {
-            auto max_it = std::max_element(shard_i_receivers.begin(), shard_i_receivers.end(), [this] (unsigned a, unsigned b) { return loads[a] > loads[b]; });
+            auto max_it = std::min_element(shard_i_receivers.begin(), shard_i_receivers.end(), [this, &processed_i = processed[i]] (unsigned a, unsigned b) { return processed_i[a] < processed_i[b]; });
             loaders[*max_it].erase(i);
             modified_receivers.insert(*max_it);
             modified_loaders.insert(i);
@@ -935,7 +948,7 @@ void cql_server::load_balancer::balancing_state::build_pools() {
         }
     }
 
-    // ...then back off one least loaded loader for overloaded receiver shards
+    // ...then back off one loaded that shared the least amount of requests for overloaded receiver shards
     for (int i = 0; i < loaders.size(); ++i) {
         std::unordered_set<unsigned> shard_i_loaders(loaders[i]);
         // remove the loaders from modified_loaders
@@ -944,7 +957,7 @@ void cql_server::load_balancer::balancing_state::build_pools() {
         if (!shard_i_loaders.empty() && loads[i] <= start_backoff_threshold) {
             // don't remove if we already removed before
             if (!modified_receivers.count(i)) {
-                auto min_it = std::min_element(shard_i_loaders.begin(), shard_i_loaders.end(), [this] (unsigned a, unsigned b) { return loads[a] > loads[b]; });
+                auto min_it = std::min_element(shard_i_loaders.begin(), shard_i_loaders.end(), [this, i] (unsigned a, unsigned b) { return processed[a][i] < processed[b][i]; });
                 receivers[*min_it].erase(i);
                 modified_receivers.insert(i);
                 modified_loaders.insert(*min_it);

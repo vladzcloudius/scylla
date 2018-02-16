@@ -121,11 +121,13 @@ private:
             static constexpr double start_backoff_threshold = 0.05; // corresponds to the load of 95%
 
             std::vector<double> loads;
+            std::vector<std::vector<size_t>> processed;
             std::vector<std::unordered_set<unsigned>> loaders;
             std::vector<std::unordered_set<unsigned>> receivers;
 
             balancing_state()
                 : loads(smp::count, 1.0)
+                , processed(smp::count, std::vector<size_t>(smp::count, 0))
                 , loaders(smp::count)
                 , receivers(smp::count)
             {}
@@ -148,6 +150,7 @@ private:
         private:
             // The metric that depends on the current queue length: queue_length_factor_base^N, when N is a current queue length.
             size_t _queue_len_metric = 0;
+            size_t _processed_requests = 0;
 
         public:
             const size_t& value() const noexcept {
@@ -156,10 +159,17 @@ private:
 
             void inc_queue_len() noexcept {
                 ++_queue_len_metric;
+                ++_processed_requests;
             }
 
             void dec_queue_len() noexcept {
                 --_queue_len_metric;
+            }
+
+            size_t get_processed() noexcept {
+                size_t tmp = _processed_requests;
+                _processed_requests = 0;
+                return tmp;
             }
         };
 
@@ -209,6 +219,8 @@ private:
         request_ctx_ptr pick_request_cpu(latency_clock::time_point start_time);
         void complete_request_handling(request_ctx_ptr ctx);
         sorted_shards_type::iterator get_sorted_iterator_for_id(unsigned id);
+
+        std::vector<size_t> get_processed();
 
         /// \brief Rebalance the element pointed by the given iterator.
         /// \note \ref id_it is going to become invalid after the call.
