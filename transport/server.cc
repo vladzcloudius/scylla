@@ -951,6 +951,11 @@ void cql_server::load_balancer::balancing_state::build_pools() {
 
     // Remove one receiver that processed the least amount of requests from the loaders that are not loaded anymore...
     for (int i = 0; i < receivers.size(); ++i) {
+        // Skip already modified loaders
+        if (modified_loaders.count(i)) {
+            continue;
+        }
+
         std::unordered_set<unsigned> shard_i_receivers(receivers[i]);
         // remove the receivers from modified_receivers
         std::for_each(modified_receivers.begin(), modified_receivers.end(), [&shard_i_receivers] (unsigned id) { shard_i_receivers.erase(id); });
@@ -966,6 +971,11 @@ void cql_server::load_balancer::balancing_state::build_pools() {
 
     // ...then back off one loaded that shared the least amount of requests for overloaded receiver shards
     for (int i = 0; i < loaders.size(); ++i) {
+        // Skip already modified receivers
+        if (modified_receivers.count(i)) {
+            continue;
+        }
+
         std::unordered_set<unsigned> shard_i_loaders(loaders[i]);
         // remove the loaders from modified_loaders
         std::for_each(modified_loaders.begin(), modified_loaders.end(), [&shard_i_loaders] (unsigned id) { shard_i_loaders.erase(id); });
