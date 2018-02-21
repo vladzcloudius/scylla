@@ -930,10 +930,26 @@ void cql_server::load_balancer::balancing_state::build_pools() {
         }
     }
 
-    // First remove one receiver that processed the least amount of requests from the loaders that are not loaded anymore...
     std::unordered_set<unsigned> modified_receivers;
     std::unordered_set<unsigned> modified_loaders;
 
+    // Remove one receiver from all loaders that have processed zero requests in this balancing period.
+    // If this receiver doesn't help this loader - let it help others.
+    for (int i = 0; i < receivers.size(); ++i) {
+        auto& receivers_i = receivers[i];
+        auto& processed_i = processed[i];
+        for (unsigned id : receivers_i) {
+            if (!processed_i[id]) {
+                loaders[id].erase(i);
+                modified_receivers.insert(id);
+                modified_loaders.insert(i);
+                receivers[i].erase(id);
+                break;
+            }
+        }
+    }
+
+    // Remove one receiver that processed the least amount of requests from the loaders that are not loaded anymore...
     for (int i = 0; i < receivers.size(); ++i) {
         std::unordered_set<unsigned> shard_i_receivers(receivers[i]);
         // remove the receivers from modified_receivers
