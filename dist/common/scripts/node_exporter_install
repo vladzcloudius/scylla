@@ -38,14 +38,24 @@ if is_gentoo_variant; then
         service prometheus-node_exporter start
     fi
 else
+    ARCH=`uname -m`
     version=0.14.0
     dir=/usr/lib/scylla/Prometheus/node_exporter
+    arch_suffix=""
     mkdir -p $dir
     cd $dir
-    curl -L https://github.com/prometheus/node_exporter/releases/download/v$version/node_exporter-$version.linux-amd64.tar.gz -o $dir/node_exporter-$version.linux-amd64.tar.gz
-    tar -xvzf $dir/node_exporter-$version.linux-amd64.tar.gz
-    rm $dir/node_exporter-$version.linux-amd64.tar.gz
-    ln -s $dir/node_exporter-$version.linux-amd64/node_exporter /usr/bin
+    if echo $ARCH | grep '86' &> /dev/null; then
+        arch_suffix=amd64
+    elif echo $ARCH | grep 'aarch' &> /dev/null; then
+        arch_suffix=arm64
+    else
+        echo "Not supported platform: $ARCH. You will need to build node_exporter manually from sources."
+        exit 1
+    fi
+    curl -L https://github.com/prometheus/node_exporter/releases/download/v$version/node_exporter-$version.linux-$arch_suffix.tar.gz -o $dir/node_exporter-$version.linux-$arch_suffix.tar.gz
+    tar -xvzf $dir/node_exporter-$version.linux-$arch_suffix.tar.gz
+    rm $dir/node_exporter-$version.linux-$arch_suffix.tar.gz
+    ln -s $dir/node_exporter-$version.linux-$arch_suffix/node_exporter /usr/bin
     . /etc/os-release
 
      if is_systemd; then
