@@ -3389,7 +3389,7 @@ database::make_keyspace_config(const keyspace_metadata& ksm) {
     cfg.read_concurrency_config.resources_sem = &_read_concurrency_sem;
     cfg.read_concurrency_config.active_reads = &_stats->active_reads;
     cfg.read_concurrency_config.timeout = _cfg->read_request_timeout_in_ms() * 1ms;
-    cfg.read_concurrency_config.max_queue_length = 100;
+    cfg.read_concurrency_config.max_queue_length = memory::stats().total_memory() * 0.02 / 10000;
     cfg.read_concurrency_config.raise_queue_overloaded_exception = [this] {
         ++_stats->sstable_read_queue_overloaded;
         throw std::runtime_error("sstable inactive read queue overloaded");

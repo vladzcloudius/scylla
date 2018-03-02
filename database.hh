@@ -1041,7 +1041,7 @@ public:
     using timeout_clock = lowres_clock;
 private:
     ::cf_stats _cf_stats;
-    static size_t max_memory_concurrent_reads() { return memory::stats().total_memory() * 0.02; }
+    static size_t max_memory_concurrent_reads() { return 100 * 16 * 1024; }
     static size_t max_memory_streaming_concurrent_reads() { return memory::stats().total_memory() * 0.02; }
     static size_t max_memory_system_concurrent_reads() { return memory::stats().total_memory() * 0.02; };
     static constexpr size_t max_concurrent_sstable_loads() { return 3; }
