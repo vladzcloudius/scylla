@@ -542,6 +542,7 @@ manager::end_point_hints_manager::sender::sender(end_point_hints_manager& parent
     , _resource_manager(_shard_manager._resource_manager)
     , _proxy(local_storage_proxy)
     , _db(local_db)
+    , _hints_cpu_sched_group(_db.get_streaming_scheduling_group())
     , _gossiper(local_gossiper)
     , _file_update_mutex(_ep_manager.file_update_mutex())
 {}
@@ -554,6 +555,7 @@ manager::end_point_hints_manager::sender::sender(const sender& other, end_point_
     , _resource_manager(_shard_manager._resource_manager)
     , _proxy(other._proxy)
     , _db(other._db)
+    , _hints_cpu_sched_group(other._hints_cpu_sched_group)
     , _gossiper(other._gossiper)
     , _file_update_mutex(_ep_manager.file_update_mutex())
 {}
@@ -662,14 +664,16 @@ future<> manager::end_point_hints_manager::sender::send_one_hint(lw_shared_ptr<s
                     return make_ready_future<>();
                 }
 
-                return this->send_one_mutation(std::move(m)).then([this, rp, ctx_ptr] {
-                    ctx_ptr->rps_set.erase(rp);
-                    ++this->shard_stats().sent;
-                }).handle_exception([this, ctx_ptr] (auto eptr) {
-                    manager_logger.trace("send_one_hint(): failed to send to {}: {}", end_point_key(), eptr);
-                    ctx_ptr->state.set(send_state::segment_replay_failed);
-                });
 
+                return with_scheduling_group(_hints_cpu_sched_group, [this, rp, ctx_ptr, m = std::move(m)] () mutable {
+                    return this->send_one_mutation(std::move(m)).then([this, rp, ctx_ptr] {
+                        ctx_ptr->rps_set.erase(rp);
+                        ++this->shard_stats().sent;
+                    }).handle_exception([this, ctx_ptr] (auto eptr) {
+                        manager_logger.trace("send_one_hint(): failed to send to {}: {}", end_point_key(), eptr);
+                        ctx_ptr->state.set(send_state::segment_replay_failed);
+                    });
+                });
             // ignore these errors and move on - probably this hint is too old and the KS/CF has been deleted...
             } catch (no_such_column_family& e) {
                 manager_logger.debug("send_hints(): no_such_column_family: {}", e.what());
