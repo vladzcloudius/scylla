@@ -102,6 +102,7 @@ private:
             manager& _shard_manager;
             service::storage_proxy& _proxy;
             database& _db;
+            seastar::scheduling_group _hints_cpu_sched_group;
             gms::gossiper& _gossiper;
             seastar::shared_mutex& _file_update_mutex;
 

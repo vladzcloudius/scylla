@@ -1303,6 +1303,10 @@ public:
         return *_cfg;
     }
 
+    const database_config& get_database_config() const noexcept {
+        return _dbcfg;
+    }
+
     future<> flush_all_memtables();
 
     // See #937. Truncation now requires a callback to get a time stamp
