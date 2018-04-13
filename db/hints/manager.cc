@@ -23,6 +23,7 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/core/gate.hh>
+#include <service/storage_service.hh>
 #include "utils/div_ceil.hh"
 #include "db/config.hh"
 #include "service/storage_proxy.hh"
@@ -92,6 +93,8 @@ future<> manager::start(shared_ptr<service::storage_proxy> proxy_ptr, shared_ptr
         }
         return get_ep_manager(ep).populate_segments_to_replay();
     }).then([this] {
+        assert(_gossiper_anchor);
+        service::get_local_storage_service().register_subscriber(this);
         // we are ready to store new hints...
         _space_watchdog.start();
     });
@@ -100,16 +103,20 @@ future<> manager::start(shared_ptr<service::storage_proxy> proxy_ptr, shared_ptr
 future<> manager::stop() {
     manager_logger.info("Asked to stop");
 
+    service::get_local_storage_service().unregister_subscriber(this);
     _stopping = true;
 
-    return when_all(
-        parallel_for_each(_ep_managers, [] (auto& pair) {
-            return pair.second.stop();
-        }),
-        _space_watchdog.stop()
-    ).finally([] {
-        manager_logger.info("Stopped");
-    }).discard_result();
+    return _draining_eps_gate.close().finally([this] {
+        return when_all(
+            parallel_for_each(_ep_managers, [] (auto& pair) {
+                return pair.second.stop();
+            }),
+            _space_watchdog.stop()
+        ).finally([this] {
+            _ep_managers.clear();
+            manager_logger.info("Stopped");
+        }).discard_result();
+    });
 }
 
 bool manager::end_point_hints_manager::store_hint(schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state) noexcept {
@@ -157,10 +164,14 @@ future<> manager::end_point_hints_manager::populate_segments_to_replay() {
 }
 
 void manager::end_point_hints_manager::start() {
+    clear_stopped();
+    allow_hints();
     _sender.start();
 }
 
 future<> manager::end_point_hints_manager::stop() noexcept {
+    assert(!stopped());
+
     return seastar::async([this] {
         std::exception_ptr eptr;
 
@@ -168,7 +179,7 @@ future<> manager::end_point_hints_manager::stop() noexcept {
         set_stopping();
 
         _store_gate.close().handle_exception([&eptr] (auto e) { eptr = std::move(e); }).get();
-        _sender.stop().handle_exception([&eptr] (auto e) { eptr = std::move(e); }).get();
+        _sender.stop(draining()).handle_exception([&eptr] (auto e) { eptr = std::move(e); }).get();
 
         with_lock(file_update_mutex(), [this] {
             if (_hints_store_anchor) {
@@ -181,17 +192,18 @@ future<> manager::end_point_hints_manager::stop() noexcept {
         if (eptr) {
             manager_logger.error("ep_manager[{}]: exception: {}", _key, eptr);
         }
+
+        set_stopped();
     });
 }
 
 manager::end_point_hints_manager::end_point_hints_manager(const key_type& key, manager& shard_manager)
     : _key(key)
     , _shard_manager(shard_manager)
+    , _state(state_set::of<state::stopped>())
     , _hints_dir(_shard_manager.hints_dir() / format("{}", _key).c_str())
     , _sender(*this, _shard_manager.local_storage_proxy(), _shard_manager.local_db(), _shard_manager.local_gossiper())
-{
-    allow_hints();
-}
+{}
 
 manager::end_point_hints_manager::end_point_hints_manager(end_point_hints_manager&& other)
     : _key(other._key)
@@ -200,6 +212,10 @@ manager::end_point_hints_manager::end_point_hints_manager(end_point_hints_manage
     , _hints_dir(std::move(other._hints_dir))
     , _sender(other._sender, *this)
 {}
+
+manager::end_point_hints_manager::~end_point_hints_manager() {
+    assert(stopped());
+}
 
 future<hints_store_ptr> manager::end_point_hints_manager::get_or_load() {
     if (!_hints_store_anchor) {
@@ -348,7 +364,7 @@ future<> manager::end_point_hints_manager::sender::do_send_one_mutation(mutation
 }
 
 bool manager::end_point_hints_manager::sender::can_send() noexcept {
-    if (stopping()) {
+    if (stopping() && !draining()) {
         return false;
     }
 
@@ -563,6 +579,38 @@ bool manager::check_dc_for(ep_key_type ep) const noexcept {
     }
 }
 
+void manager::drain_for(gms::inet_address endpoint) {
+    if (_stopping) {
+        return;
+    }
+
+    manager_logger.trace("on_leave_cluster: {} is removed/decommissioned", endpoint);
+
+    with_gate(_draining_eps_gate, [this, endpoint] {
+        if (utils::fb_utilities::is_me(endpoint)) {
+            return parallel_for_each(_ep_managers, [] (auto& pair) {
+                pair.second.set_draining();
+                return pair.second.stop().finally([&pair] {
+                    return io_check(remove_file, pair.second.hints_dir().c_str());
+                });
+            }).finally([this] {
+                _ep_managers.clear();
+            });
+        } else {
+            ep_managers_map_type::iterator ep_manager_it = find_ep_manager(endpoint);
+            if (ep_manager_it != ep_managers_end()) {
+                ep_manager_it->second.set_draining();
+                return ep_manager_it->second.stop().finally([this, endpoint, hints_dir = ep_manager_it->second.hints_dir()] {
+                    _ep_managers.erase(endpoint);
+                    return io_check(remove_file, hints_dir.c_str());
+                });
+            }
+
+            return make_ready_future<>();
+        }
+    });
+}
+
 manager::end_point_hints_manager::sender::sender(end_point_hints_manager& parent, service::storage_proxy& local_storage_proxy, database& local_db, gms::gossiper& local_gossiper) noexcept
     : _stopped(make_ready_future<>())
     , _ep_key(parent.end_point_key())
@@ -586,9 +634,25 @@ manager::end_point_hints_manager::sender::sender(const sender& other, end_point_
 {}
 
 
-future<> manager::end_point_hints_manager::sender::stop() noexcept {
-    set_stopping();
-    return std::move(_stopped);
+future<> manager::end_point_hints_manager::sender::stop(bool drain) noexcept {
+    return seastar::async([this, drain] {
+        set_stopping();
+        _stopped.get();
+
+        if (drain) {
+            manager_logger.trace("Draining for {}: start", end_point_key());
+            set_draining();
+            send_hints_maybe();
+            assert(!have_segments());
+            _ep_manager.flush_current_hints().handle_exception([] (auto e) {
+                manager_logger.error("Failed to flush pending hints: {}. Ignoring...", e);
+            }).get();
+            send_hints_maybe();
+            assert(!have_segments());
+            manager_logger.trace("Draining for {}: end", end_point_key());
+        }
+        manager_logger.trace("ep_manager({})::sender: exiting", end_point_key());
+    });
 }
 
 void manager::end_point_hints_manager::sender::add_segment(sstring seg_name) {
@@ -624,7 +688,6 @@ void manager::end_point_hints_manager::sender::start() {
                 manager_logger.trace("sender: got the exception: {}", std::current_exception());
             }
         }
-        manager_logger.trace("ep_manager({})::sender: exiting", end_point_key());
     });
 }
 
@@ -701,7 +764,7 @@ bool manager::end_point_hints_manager::sender::send_one_file(const sstring& fnam
         auto s = commitlog::read_log_file(fname, [this, secs_since_file_mod, &fname, ctx_ptr] (temporary_buffer<char> buf, db::replay_position rp) mutable {
             // Check that we can still send the next hint. Don't try to send it if the destination host
             // is DOWN or if we have already failed to send some of the previous hints.
-            if (ctx_ptr->state.contains(send_state::segment_replay_failed)) {
+            if (!draining() && ctx_ptr->state.contains(send_state::segment_replay_failed)) {
                 return make_ready_future<>();
             }
 
@@ -724,6 +787,12 @@ bool manager::end_point_hints_manager::sender::send_one_file(const sstring& fnam
 
     // wait till all background hints sending is complete
     ctx_ptr->file_send_gate.close().get();
+
+    // If we are draining ignore failures and drop the segment even if we failed to send it.
+    if (draining() && ctx_ptr->state.contains(send_state::segment_replay_failed)) {
+        manager_logger.trace("send_one_file(): we are draining so we are going to delete the segment anyway");
+        ctx_ptr->state.remove(send_state::segment_replay_failed);
+    }
 
     // update the next iteration replay position if needed
     if (ctx_ptr->state.contains(send_state::segment_replay_failed)) {
