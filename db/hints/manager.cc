@@ -310,6 +310,7 @@ future<db::commitlog> manager::end_point_hints_manager::add_store() noexcept {
             cfg.commitlog_total_space_in_mb = resource_manager::max_hints_per_ep_size_mb;
             cfg.fname_prefix = manager::FILENAME_PREFIX;
             cfg.extensions = &_shard_manager.local_db().get_config().extensions();
+            cfg.write_io_prio_class = service::get_local_streaming_write_priority();
 
             return commitlog::create_commitlog(std::move(cfg)).then([this] (commitlog l) {
                 // add_store() is triggered every time hint files are forcefully flushed to I/O (every hints_flush_period).
@@ -713,7 +714,7 @@ bool manager::end_point_hints_manager::sender::send_one_file(const sstring& fnam
             return flush_maybe().finally([this, ctx_ptr, buf = std::move(buf), rp, secs_since_file_mod, &fname] () mutable {
                 return send_one_hint(std::move(ctx_ptr), std::move(buf), rp, secs_since_file_mod, fname);
             });
-        }, _last_not_complete_rp.pos, &_db.get_config().extensions()).get0();
+        }, _last_not_complete_rp.pos, &_db.get_config().extensions(), service::get_local_streaming_read_priority()).get0();
 
         s->done().get();
     } catch (...) {

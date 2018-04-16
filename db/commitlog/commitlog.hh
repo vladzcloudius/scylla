@@ -41,6 +41,7 @@
 #pragma once
 
 #include <memory>
+#include <service/priority_manager.hh>
 
 #include "core/future.hh"
 #include "core/shared_ptr.hh"
@@ -129,6 +130,7 @@ public:
         std::string fname_prefix = descriptor::FILENAME_PREFIX;
 
         const db::extensions * extensions = nullptr;
+        seastar::io_priority_class write_io_prio_class = service::get_local_commitlog_priority();
     };
 
     struct descriptor {
@@ -355,7 +357,7 @@ public:
     };
 
     static future<std::unique_ptr<subscription<temporary_buffer<char>, replay_position>>> read_log_file(
-            const sstring&, commit_load_reader_func, position_type = 0, const db::extensions* = nullptr);
+            const sstring&, commit_load_reader_func, position_type = 0, const db::extensions* = nullptr, seastar::io_priority_class read_io_prio_class = service::get_local_commitlog_priority());
 private:
     commitlog(config);
 
