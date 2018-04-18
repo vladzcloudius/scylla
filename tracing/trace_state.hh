@@ -49,6 +49,15 @@
 #include "gms/inet_address.hh"
 #include "auth/authenticated_user.hh"
 
+namespace cql3 {
+class query_options;
+class raw_value_view;
+
+namespace statements {
+class prepared_statement;
+}
+}
+
 namespace tracing {
 
 extern logging::logger trace_state_logger;
@@ -75,6 +84,19 @@ public:
         inactive,
         foreground,
         background
+    };
+
+    // Parameters needed for logging values of EXECUTE command arguments.
+    struct execute_parameters {
+        const cql3::query_options* options_ptr = nullptr;
+        const cql3::statements::prepared_statement* prepared_ptr = nullptr;
+
+        execute_parameters(const cql3::query_options* eo_ptr, const cql3::statements::prepared_statement* ps_ptr)
+            : options_ptr(eo_ptr)
+            , prepared_ptr(ps_ptr)
+        {
+            assert(options_ptr);
+        }
     };
 
 private:
@@ -165,10 +187,12 @@ public:
     /**
      * Stop a foreground state and write pending records to I/O.
      *
-     * @note The tracing session's "duration" is the time it was in the "foreground"
-     * state.
+     * @param execute_options_ptr query options of the EXECUTE statement
+     * @param prepared_ptr
+     *
+     * @note The tracing session's "duration" is the time it was in the "foreground" state.
      */
-    void stop_foreground_and_write() noexcept;
+    void stop_foreground_and_write(stdx::optional<execute_parameters> execute_params = stdx::nullopt) noexcept;
 
     const utils::UUID& session_id() const {
         return _records->session_id;
@@ -336,6 +360,16 @@ private:
     }
 
     /**
+     * Returns the string with the representation of the given raw value.
+     * If the value is NULL or unset the 'null' or 'unset value' strings are returned correspondingly.
+     *
+     * @param v view of the given raw value
+     * @param t type object corresponding to the given raw value.
+     * @return the string with the representation of the given raw value.
+     */
+    sstring raw_value_to_sstring(const cql3::raw_value_view& v, const data_type& t);
+
+    /**
      * Stores a page size of a query being traced.
      *
      * This value will eventually be stored in a params<string, string> map of a tracing session
@@ -386,9 +420,9 @@ private:
     /**
      * Fill the map in a session's record with the values set so far.
      *
-     * @param params_map the map to fill
+     * @param execute_params parameters of the EXECUTE statement
      */
-    void build_parameters_map();
+    void build_parameters_map(stdx::optional<execute_parameters> execute_params);
 
     /**
      * The actual trace message storing method.
@@ -630,9 +664,9 @@ inline std::experimental::optional<trace_info> make_trace_info(const trace_state
     return std::experimental::nullopt;
 }
 
-inline void stop_foreground(const trace_state_ptr& state) noexcept {
+inline void stop_foreground(const trace_state_ptr& state, stdx::optional<trace_state::execute_parameters> execute_params = stdx::nullopt) noexcept {
     if (state) {
-        state->stop_foreground_and_write();
+        state->stop_foreground_and_write(std::move(execute_params));
     }
 }
 

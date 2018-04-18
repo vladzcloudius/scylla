@@ -941,8 +941,16 @@ future<response_type> cql_server::connection::process_execute(uint16_t stream, b
     return _server._query_processor.local().process_statement(stmt, query_state, options).then([this, stream, buf = std::move(buf), &query_state, skip_metadata] (auto msg) {
         tracing::trace(query_state.get_trace_state(), "Done processing - preparing a result");
         return this->make_result(stream, msg, query_state.get_trace_state(), skip_metadata);
-    }).then([&query_state, q_state = std::move(q_state), this] (auto&& response) {
+    }).then([&query_state, q_state = std::move(q_state), prepared = std::move(prepared), this] (auto&& response) {
         /* Keep q_state alive. */
+
+        // Trace EXECUTE parameters native values representations only if the current prepared statement has not been evicted from the cache by the time we got here.
+        // Such an eviction is a very unlikely event, however if it happens, since we are unable to recover their types, trace raw representations of the values.
+        if (prepared) {
+            tracing::stop_foreground(query_state.get_trace_state(), tracing::trace_state::execute_parameters(q_state->options.get(), prepared.get()));
+        } else {
+            tracing::stop_foreground(query_state.get_trace_state(), tracing::trace_state::execute_parameters(q_state->options.get(), nullptr));
+        }
         return make_ready_future<response_type>(std::make_pair(response, query_state.get_client_state()));
     });
 }
