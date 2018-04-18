@@ -43,6 +43,8 @@
 #include <deque>
 #include <unordered_set>
 #include <seastar/util/lazy.hh>
+#include "cql3/query_options.hh"
+#include "cql3/statements/prepared_statement.hh"
 #include "mutation.hh"
 #include "utils/UUID_gen.hh"
 #include "tracing/tracing.hh"
@@ -75,6 +77,20 @@ public:
         inactive,
         foreground,
         background
+    };
+
+    // Parameters needed for logging values of EXECUTE command arguments.
+    struct execute_parameters {
+        const cql3::query_options* options_ptr = nullptr;
+        cql3::statements::prepared_statement::checked_weak_ptr prepared_ptr;
+
+    public:
+        execute_parameters() {}; // can't use a "=default" here due to "error: constructor required before non-static data member for ‘options_ptr’ has been parsed"
+        execute_parameters(const cql3::query_options* eo_ptr, cql3::statements::prepared_statement::checked_weak_ptr ps_ptr)
+                : options_ptr(eo_ptr)
+                , prepared_ptr(std::move(ps_ptr))
+        {}
+        explicit operator bool() const noexcept { return options_ptr != nullptr; }
     };
 
 private:
@@ -162,14 +178,6 @@ public:
 
     ~trace_state();
 
-    /**
-     * Stop a foreground state and write pending records to I/O.
-     *
-     * @note The tracing session's "duration" is the time it was in the "foreground"
-     * state.
-     */
-    void stop_foreground_and_write() noexcept;
-
     const utils::UUID& session_id() const {
         return _records->session_id;
     }
@@ -228,6 +236,16 @@ public:
     }
 
 private:
+    /**
+     * Stop a foreground state and write pending records to I/O.
+     *
+     * @param execute_options_ptr query options of the EXECUTE statement
+     * @param prepared_ptr
+     *
+     * @note The tracing session's "duration" is the time it was in the "foreground" state.
+     */
+    void stop_foreground_and_write(execute_parameters execute_params = execute_parameters()) noexcept;
+
     bool should_log_slow_query(elapsed_clock::duration e) const {
         return log_slow_query() && e > _slow_query_threshold;
     }
@@ -336,6 +354,16 @@ private:
     }
 
     /**
+     * Returns the string with the representation of the given raw value.
+     * If the value is NULL or unset the 'null' or 'unset value' strings are returned correspondingly.
+     *
+     * @param v view of the given raw value
+     * @param t type object corresponding to the given raw value.
+     * @return the string with the representation of the given raw value.
+     */
+    sstring raw_value_to_sstring(const cql3::raw_value_view& v, const data_type& t);
+
+    /**
      * Stores a page size of a query being traced.
      *
      * This value will eventually be stored in a params<string, string> map of a tracing session
@@ -386,9 +414,9 @@ private:
     /**
      * Fill the map in a session's record with the values set so far.
      *
-     * @param params_map the map to fill
+     * @param execute_params parameters of the EXECUTE statement
      */
-    void build_parameters_map();
+    void build_parameters_map(execute_parameters execute_params);
 
     /**
      * The actual trace message storing method.
@@ -452,6 +480,8 @@ private:
     friend void set_user_timestamp(const trace_state_ptr& p, api::timestamp_type val);
     friend void set_username(const trace_state_ptr& p, const stdx::optional<auth::authenticated_user>& user);
     friend void add_table_name(const trace_state_ptr& p, const sstring& ks_name, const sstring& cf_name);
+    friend void stop_foreground(const trace_state_ptr& state) noexcept;
+    friend void stop_foreground_execute(const trace_state_ptr& state, trace_state::execute_parameters execute_params) noexcept;
 };
 
 inline void trace_state::trace_internal(sstring message) {
@@ -633,6 +663,12 @@ inline std::experimental::optional<trace_info> make_trace_info(const trace_state
 inline void stop_foreground(const trace_state_ptr& state) noexcept {
     if (state) {
         state->stop_foreground_and_write();
+    }
+}
+
+inline void stop_foreground_execute(const trace_state_ptr& state, trace_state::execute_parameters execute_params) noexcept {
+    if (state) {
+        state->stop_foreground_and_write(std::move(execute_params));
     }
 }
 

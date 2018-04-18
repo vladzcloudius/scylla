@@ -41,6 +41,7 @@
 #include <chrono>
 #include <cmath>
 #include <ctgmath>
+#include <algorithm>
 #include <seastar/core/shared_ptr.hh>
 
 #include "sstables.hh"
@@ -168,7 +169,7 @@ public:
         _sstables.push_back(std::move(sst));
     }
     virtual void erase(shared_sstable sst) override {
-        _sstables.erase(boost::find(_sstables, sst));
+        _sstables.erase(std::find(_sstables.begin(), _sstables.end(), sst));
     }
     virtual std::unique_ptr<incremental_selector_impl> make_incremental_selector() const override;
     class incremental_selector;
