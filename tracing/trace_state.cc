@@ -45,11 +45,14 @@
 #include "to_string.hh"
 #include "timestamp.hh"
 
+#include "cql3/values.hh"
+#include "cql3/query_options.hh"
+
 namespace tracing {
 
 logging::logger trace_state_logger("trace_state");
 
-void trace_state::build_parameters_map() {
+void trace_state::build_parameters_map(const std::unique_ptr<cql3::query_options>& execute_options_ptr) {
     if (!_params_ptr) {
         return;
     }
@@ -80,6 +83,12 @@ void trace_state::build_parameters_map() {
     if (vals.user_timestamp) {
         params_map.emplace("user_timestamp", seastar::format("{:d}", *vals.user_timestamp));
     }
+
+    if (execute_options_ptr) {
+        for (size_t i = 0; i < execute_options_ptr->get_values_count(); ++i) {
+            params_map.emplace(format("param{:d}", i), raw_value_to_sstring(execute_options_ptr->get_value_at(i)));
+        }
+    }
 }
 
 trace_state::~trace_state() {
@@ -93,7 +102,7 @@ trace_state::~trace_state() {
     trace_state_logger.trace("{}: destructing", session_id());
 }
 
-void trace_state::stop_foreground_and_write() noexcept {
+void trace_state::stop_foreground_and_write(const std::unique_ptr<cql3::query_options>& execute_options_ptr) noexcept {
     // Do nothing if state hasn't been initiated
     if (is_in_state(state::inactive)) {
         return;
@@ -124,7 +133,7 @@ void trace_state::stop_foreground_and_write() noexcept {
             // events' records that have already been sent to I/O).
             if (should_write_records()) {
                 try {
-                    build_parameters_map();
+                    build_parameters_map(execute_options_ptr);
                 } catch (...) {
                     // Bump up an error counter, drop any pending records and
                     // continue
@@ -143,6 +152,23 @@ void trace_state::stop_foreground_and_write() noexcept {
         _local_tracing_ptr->write_session_records(_records, write_on_close());
     } else {
         _records->drop_records();
+    }
+}
+
+sstring trace_state::raw_value_to_sstring(const cql3::raw_value_view& v) {
+    static constexpr int max_val_bytes = 64;
+
+    if (v.is_null()) {
+        return "null";
+    } else if (v.is_unset_value()) {
+        return "unset value";
+    } else {
+        const bytes_view& val = *v;
+        if (val.size() > max_val_bytes) {
+            return format("0x{}...", to_hex(val.substr(0, max_val_bytes)));
+        } else {
+            return format("0x{}", to_hex(val.data()));
+        }
     }
 }
 }

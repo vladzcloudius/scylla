@@ -943,6 +943,7 @@ future<response_type> cql_server::connection::process_execute(uint16_t stream, b
         return this->make_result(stream, msg, query_state.get_trace_state(), skip_metadata);
     }).then([&query_state, q_state = std::move(q_state), this] (auto&& response) {
         /* Keep q_state alive. */
+        tracing::stop_foreground(query_state.get_trace_state(), q_state->options);
         return make_ready_future<response_type>(std::make_pair(response, query_state.get_client_state()));
     });
 }

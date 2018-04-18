@@ -49,6 +49,11 @@
 #include "gms/inet_address.hh"
 #include "auth/authenticated_user.hh"
 
+namespace cql3 {
+class query_options;
+class raw_value_view;
+}
+
 namespace tracing {
 
 extern logging::logger trace_state_logger;
@@ -168,7 +173,7 @@ public:
      * @note The tracing session's "duration" is the time it was in the "foreground"
      * state.
      */
-    void stop_foreground_and_write() noexcept;
+    void stop_foreground_and_write(const std::unique_ptr<cql3::query_options>& execute_options_ptr = nullptr) noexcept;
 
     const utils::UUID& session_id() const {
         return _records->session_id;
@@ -336,6 +341,15 @@ private:
     }
 
     /**
+     * Returns the string with the representation of the given raw value.
+     * If the value is NULL or unset the 'null' or 'unset value' strings are returned correspondingly.
+     *
+     * @param v view of the given raw value
+     * @return the string with the representation of the given raw value.
+     */
+    sstring raw_value_to_sstring(const cql3::raw_value_view& v);
+
+    /**
      * Stores a page size of a query being traced.
      *
      * This value will eventually be stored in a params<string, string> map of a tracing session
@@ -388,7 +402,7 @@ private:
      *
      * @param params_map the map to fill
      */
-    void build_parameters_map();
+    void build_parameters_map(const std::unique_ptr<cql3::query_options>& execute_options_ptr = nullptr);
 
     /**
      * The actual trace message storing method.
@@ -630,9 +644,9 @@ inline std::experimental::optional<trace_info> make_trace_info(const trace_state
     return std::experimental::nullopt;
 }
 
-inline void stop_foreground(const trace_state_ptr& state) noexcept {
+inline void stop_foreground(const trace_state_ptr& state, const std::unique_ptr<cql3::query_options>& execute_options_ptr = nullptr) noexcept {
     if (state) {
-        state->stop_foreground_and_write();
+        state->stop_foreground_and_write(execute_options_ptr);
     }
 }
 
