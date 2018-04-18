@@ -45,11 +45,14 @@
 #include "to_string.hh"
 #include "timestamp.hh"
 
+#include "cql3/values.hh"
+#include "cql3/query_options.hh"
+
 namespace tracing {
 
 logging::logger trace_state_logger("trace_state");
 
-void trace_state::build_parameters_map() {
+void trace_state::build_parameters_map(const cql3::query_options* prepared_options_ptr) {
     if (!_params_ptr) {
         return;
     }
@@ -88,6 +91,50 @@ void trace_state::build_parameters_map() {
     if (vals.user_timestamp) {
         params_map.emplace("user_timestamp", seastar::format("{:d}", *vals.user_timestamp));
     }
+
+    if (prepared_options_ptr) {
+        auto& prepared_statements = vals.prepared_statements;
+
+        if (prepared_statements.empty()) {
+            throw std::logic_error("Tracing a prepared statement but no prepared statement is stored");
+        }
+
+        // Parameter's key in the map will be "param[X]" for a single query CQL command and "param[Y][X] for a multiple
+        // queries CQL command, where X is an index of the parameter in a corresponding query and Y is an index of the
+        // corresponding query in the BATCH.
+        if (prepared_statements.size() == 1) {
+            build_parameters_map_for_one_prepared(prepared_statements[0], prepared_options_ptr->for_statement(0), "param");
+        } else {
+            // BATCH
+            for (size_t i = 0; i < prepared_statements.size(); ++i) {
+                build_parameters_map_for_one_prepared(prepared_statements[i], prepared_options_ptr->for_statement(i), format("param[{:d}]", i));
+            }
+        }
+    }
+}
+
+void trace_state::build_parameters_map_for_one_prepared(const cql3::statements::prepared_statement::checked_weak_ptr& prepared_ptr, const cql3::query_options& options, const sstring& param_name_prefix) {
+    auto& params_map = _records->session_rec.parameters;
+    auto& names_opt = options.get_names();
+    size_t i = 0;
+
+    // Trace parameters native values representations only if the current prepared statement has not been evicted from the cache by the time we got here.
+    // Such an eviction is a very unlikely event, however if it happens, since we are unable to recover their types, trace raw representations of the values.
+
+    if (names_opt) {
+        if (names_opt->size() != options.get_values_count()) {
+            throw std::logic_error(format("Number of \"names\" ({}) doesn't match the number of positional variables ({})", names_opt->size(), options.get_values_count()).c_str());
+        }
+
+        auto& names = names_opt.value();
+        for (; i < options.get_values_count(); ++i) {
+            params_map.emplace(format("{}[{:d}]({})", param_name_prefix, i, names[i]), raw_value_to_sstring(options.get_value_at(i), prepared_ptr ? prepared_ptr->bound_names[i]->type : nullptr));
+        }
+    } else {
+        for (; i < options.get_values_count(); ++i) {
+            params_map.emplace(format("{}[{:d}]", param_name_prefix, i), raw_value_to_sstring(options.get_value_at(i), prepared_ptr ? prepared_ptr->bound_names[i]->type : nullptr));
+        }
+    }
 }
 
 trace_state::~trace_state() {
@@ -101,7 +148,7 @@ trace_state::~trace_state() {
     trace_state_logger.trace("{}: destructing", session_id());
 }
 
-void trace_state::stop_foreground_and_write() noexcept {
+void trace_state::stop_foreground_and_write(const cql3::query_options* prepared_options_ptr) noexcept {
     // Do nothing if state hasn't been initiated
     if (is_in_state(state::inactive)) {
         return;
@@ -132,7 +179,7 @@ void trace_state::stop_foreground_and_write() noexcept {
             // events' records that have already been sent to I/O).
             if (should_write_records()) {
                 try {
-                    build_parameters_map();
+                    build_parameters_map(prepared_options_ptr);
                 } catch (...) {
                     // Bump up an error counter, drop any pending records and
                     // continue
@@ -151,6 +198,32 @@ void trace_state::stop_foreground_and_write() noexcept {
         _local_tracing_ptr->write_session_records(_records, write_on_close());
     } else {
         _records->drop_records();
+    }
+}
+
+sstring trace_state::raw_value_to_sstring(const cql3::raw_value_view& v, const data_type& t) {
+    static constexpr int max_val_bytes = 64;
+
+    if (v.is_null()) {
+        return "null";
+    } else if (v.is_unset_value()) {
+        return "unset value";
+    } else {
+        const bytes_view& val = *v;
+        sstring str_rep;
+
+        if (t) {
+            str_rep = t->to_string(to_bytes(val));
+        } else {
+            trace_state_logger.trace("{}: data types are unavailable - tracing a raw value", session_id());
+            str_rep = to_hex(val);
+        }
+
+        if (str_rep.size() > max_val_bytes) {
+            return format("{}...", str_rep.substr(0, max_val_bytes));
+        } else {
+            return str_rep;
+        }
     }
 }
 }
