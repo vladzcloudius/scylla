@@ -46,6 +46,7 @@
 #include <seastar/core/sharded.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/metrics_registration.hh>
+#include <seastar/core/metrics_api.hh>
 #include "gc_clock.hh"
 #include "utils/UUID.hh"
 #include "gms/inet_address.hh"
@@ -55,6 +56,7 @@
 
 namespace tracing {
 
+namespace mi =  seastar::metrics::impl;
 using elapsed_clock = std::chrono::steady_clock;
 
 extern logging::logger tracing_logger;
@@ -161,6 +163,35 @@ public:
 
 struct one_session_records;
 using records_bulk = std::deque<lw_shared_ptr<one_session_records>>;
+using metrics_values_map = std::map<sstring, double>;
+
+class metric_instance_handle {
+private:
+    sstring _full_name;
+    mi::register_ref _registered_metric_instance_ref;
+    mi::metric_function& _func_ref;
+
+public:
+    metric_instance_handle(mi::register_ref ref, const mi::labels_type& labels, const sstring& metric_family_name);
+
+    double val() const {
+        return _func_ref().d();
+    };
+
+    const sstring& full_name() const noexcept {
+        return _full_name;
+    }
+
+private:
+    /**
+     * Builds a metric full name: <metric_family_name> + ["_" + <label value>]*
+     *
+     * @param labels a map of labels of this metric instance
+     * @param metric_family_name name of a corresponding metric family
+     * @return a "full" metric instance name, e.g. reactor_utilization_0_gauge
+     */
+    sstring build_full_name(const mi::labels_type& labels, const sstring& metric_family_name) const;
+};
 
 struct backend_session_state_base {
     virtual ~backend_session_state_base() {};
@@ -330,6 +361,8 @@ public:
         uint64_t trace_errors = 0;
     } stats;
 
+    using metrics_handles = std::unordered_map<sstring, std::vector<metric_instance_handle>>;
+
 private:
     // A number of currently active tracing sessions
     uint64_t _active_sessions = 0;
@@ -397,8 +430,13 @@ private:
     std::ranlux48_base _gen;
     std::chrono::microseconds _slow_query_duration_threshold;
     std::chrono::seconds _slow_query_record_ttl;
+    metrics_handles _traced_metrics_handles;
 
 public:
+    const metrics_handles& traced_metrics_handles() const noexcept {
+        return _traced_metrics_handles;
+    }
+
     uint64_t get_next_rand_uint64() {
         return _gen();
     }
@@ -524,6 +562,16 @@ public:
     double get_trace_probability() const {
         return _trace_probability;
     }
+
+    /**
+     * Add a metric that needs to be traced.
+     * Returns FALSE if a metric with a @ref metric_name does not exist or is disabled.
+     *
+     * @param metric_name a metric name
+     * @return true if a metric has been successfully added to the group of metrics that are traced.
+     */
+    bool add_metric(sstring metric_name);
+    bool remove_metric(sstring metric_name);
 
     bool trace_next_query() {
         return _normalized_trace_probability != 0 && _gen() < _normalized_trace_probability;

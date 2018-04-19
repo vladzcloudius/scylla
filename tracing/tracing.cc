@@ -39,6 +39,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 #include <seastar/core/metrics.hh>
+#include <seastar/core/metrics_api.hh>
 #include "tracing/tracing.hh"
 #include "utils/class_registrator.hh"
 #include "tracing/trace_state.hh"
@@ -204,6 +205,54 @@ void tracing::set_trace_probability(double p) {
     tracing_logger.info("Setting tracing probability to {} (normalized {})", _trace_probability, _normalized_trace_probability);
 }
 
+bool tracing::add_metric(sstring metric_name) {
+    namespace mi = seastar::metrics::impl; //::get_value_map()
+
+    // If metric exists already - do nothing
+    if (_traced_metrics_handles.count(metric_name)) {
+        tracing_logger.debug("metric {} is already traced", metric_name);
+        return true;
+    }
+
+    auto& metrics_map = mi::get_value_map();
+    auto it = metrics_map.find(metric_name);
+    if (it == metrics_map.end()) {
+        tracing_logger.error("metric {} is unknown", metric_name);
+        return false;
+    }
+
+    const mi::metric_family& mf = it->second;
+    std::vector<metric_instance_handle> metric_handles;
+
+    for(auto& p : mf) {
+        // If the metric instance is not enabled - move to the next one.
+        // If there isn't any metric instance that is enabled in this metrics family we will return an error.
+        if (!p.second->is_enabled()) {
+            continue;
+        }
+
+        metric_handles.emplace_back(p.second, p.first, metric_name);
+        tracing_logger.info("going to trace {} metric", metric_handles.rbegin()->full_name());
+    }
+
+    if (metric_handles.empty()) {
+        tracing_logger.error("all metrics of {} are disabled", metric_name);
+        return false;
+    }
+
+    _traced_metrics_handles.emplace(std::move(metric_name), std::move(metric_handles));
+    return true;
+}
+
+bool tracing::remove_metric(sstring metric_name) {
+    if (!_traced_metrics_handles.erase(metric_name)) {
+        tracing_logger.error("trying to remove a metric that is not traced: {}", metric_name);
+        return false;
+    }
+
+    return true;
+}
+
 one_session_records::one_session_records()
     : backend_state_ptr(tracing::get_local_tracing_instance().allocate_backend_session_state())
     , budget_ptr(tracing::get_local_tracing_instance().get_cached_records_ptr()) {}
@@ -211,5 +260,21 @@ one_session_records::one_session_records()
 std::ostream& operator<<(std::ostream& os, const span_id& id) {
     return os << id.get_id();
 }
+
+sstring metric_instance_handle::build_full_name(const mi::labels_type& labels, const sstring& metric_family_name) const {
+    sstring metric_full_name(metric_family_name);
+
+    for(auto& lbl_pair : labels) {
+        metric_full_name += format("_{}", lbl_pair.second);
+    }
+
+    return metric_full_name;
+}
+
+metric_instance_handle::metric_instance_handle(mi::register_ref ref, const mi::labels_type& labels, const sstring& metric_family_name)
+    : _full_name(build_full_name(labels, metric_family_name))
+    , _registered_metric_instance_ref(std::move(ref))
+    , _func_ref(_registered_metric_instance_ref->get_function())
+{}
 }
 
