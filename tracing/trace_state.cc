@@ -171,4 +171,16 @@ sstring trace_state::raw_value_to_sstring(const cql3::raw_value_view& v) {
         }
     }
 }
+
+metrics_values_map trace_state::get_metrics_values() {
+    metrics_values_map metrics_values;
+
+    for(auto& metric_family_val_pair : _local_tracing_ptr->traced_metrics_handles()) {
+        for (auto& metric_val : metric_family_val_pair.second) {
+            metrics_values.emplace(metric_val.full_name(), metric_val.val());
+        }
+    }
+
+    return metrics_values;
+}
 }

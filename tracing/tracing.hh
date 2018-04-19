@@ -229,11 +229,13 @@ struct event_record {
     sstring message;
     elapsed_clock::duration elapsed;
     i_tracing_backend_helper::wall_clock::time_point event_time_point;
+    metrics_values_map metrics_values;
 
-    event_record(sstring message_, elapsed_clock::duration elapsed_, i_tracing_backend_helper::wall_clock::time_point event_time_point_)
+    event_record(sstring message_, elapsed_clock::duration elapsed_, i_tracing_backend_helper::wall_clock::time_point event_time_point_, metrics_values_map metrics_values_)
         : message(std::move(message_))
         , elapsed(elapsed_)
-        , event_time_point(event_time_point_) {}
+        , event_time_point(event_time_point_)
+        , metrics_values(std::move(metrics_values_)) {}
 };
 
 struct session_record {

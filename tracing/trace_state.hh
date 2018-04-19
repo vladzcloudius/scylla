@@ -413,6 +413,13 @@ private:
     void trace_internal(sstring msg);
 
     /**
+     * Build a sstring -> double map of traced metrics names and their current values.
+     *
+     * @return std::map<sstring, double> with mappings of traced metrics names to their current values.
+     */
+    metrics_values_map get_metrics_values();
+
+    /**
      * Add a single trace entry - a special case for a simple string.
      *
      * @param msg trace message
@@ -491,7 +498,7 @@ inline void trace_state::trace_internal(sstring message) {
 
     try {
         auto e = elapsed();
-        _records->events_recs.emplace_back(std::move(message), e, i_tracing_backend_helper::wall_clock::now());
+        _records->events_recs.emplace_back(std::move(message), e, i_tracing_backend_helper::wall_clock::now(), get_metrics_values());
         _records->consume_from_budget();
 
         // If we have aggregated enough records - schedule them for write already.
