@@ -32,7 +32,8 @@ events_cols = {
     'source_elapsed': 'int',
     'thread'        : 'text',
     'scylla_span_id'   : 'bigint',
-    'scylla_parent_id' : 'bigint'
+    'scylla_parent_id' : 'bigint',
+    'scylla_metrics'   : 'frozen <map<text, double>>'
 }
 
 sessions_cols = {
