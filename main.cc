@@ -279,6 +279,27 @@ static stdx::optional<std::vector<sstring>> parse_hinted_handoff_enabled(sstring
     return dcs;
 }
 
+static stdx::optional<std::vector<sstring>> parse_traced_metrics(sstring opt) {
+    using namespace boost::algorithm;
+
+    if (opt.empty()) {
+        return stdx::nullopt;
+    }
+
+    std::vector<sstring> metrics_names;
+    split(metrics_names, opt, is_any_of(","));
+
+    for(sstring& metric_name : metrics_names) {
+        trim(metric_name);
+        if (metric_name.empty()) {
+            startlog.error("traced_metrics: a metric name may not be an empty string: {}", opt);
+            throw bad_configuration_error();
+        }
+    };
+
+    return metrics_names;
+}
+
 int main(int ac, char** av) {
   int return_value = 0;
   try {
@@ -386,6 +407,7 @@ int main(int ac, char** av) {
             sstring broadcast_address = cfg->broadcast_address();
             sstring broadcast_rpc_address = cfg->broadcast_rpc_address();
             stdx::optional<std::vector<sstring>> hinted_handoff_enabled = cfg->experimental() ? parse_hinted_handoff_enabled(cfg->hinted_handoff_enabled()) : stdx::nullopt;
+            stdx::optional<std::vector<sstring>> traced_metrics = parse_traced_metrics(cfg->traced_metrics());
             auto prom_addr = seastar::net::dns::get_host_by_name(cfg->prometheus_address()).get0();
             supervisor::notify("starting prometheus API server");
             uint16_t pport = cfg->prometheus_port();
@@ -734,6 +756,18 @@ int main(int ac, char** av) {
             }
             api::set_server_done(ctx).get();
             supervisor::notify("serving");
+
+            // All metrics should be registered at this point and we may register the traced metrics
+            if (traced_metrics) {
+                tracing::tracing::tracing_instance().invoke_on_all([&traced_metrics] (tracing::tracing& local_tracing) {
+                    for(const sstring& metric_name : traced_metrics.value()) {
+                        if (!local_tracing.add_metric(metric_name)) {
+                            supervisor::notify(format("failed to register a metric {} for tracing", metric_name));
+                        }
+                    }
+                }).get();
+            }
+
             // Register at_exit last, so that storage_service::drain_on_shutdown will be called first
             engine().at_exit([] {
                 return repair_shutdown(service::get_local_storage_service().db());
