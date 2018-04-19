@@ -113,6 +113,7 @@ trace_keyspace_helper::trace_keyspace_helper(tracing& tr)
                                 "thread text,"
                                 "scylla_parent_id bigint,"
                                 "scylla_span_id bigint,"
+                                "scylla_metrics frozen <map<text, double>>,"
                                 "PRIMARY KEY ((session_id), event_id)) "
                                 "WITH default_time_to_live = 86400", KEYSPACE_NAME, EVENTS),
 
@@ -124,7 +125,8 @@ trace_keyspace_helper::trace_keyspace_helper(tracing& tr)
                                 "source_elapsed, "
                                 "thread,"
                                 "scylla_parent_id,"
-                                "scylla_span_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                                "scylla_span_id,"
+                                "scylla_metrics) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
                                 "USING TTL ?", KEYSPACE_NAME, EVENTS))
 
             , _slow_query_log(KEYSPACE_NAME, NODE_SLOW_QUERY_LOG,
@@ -328,6 +330,11 @@ cql3::query_options trace_keyspace_helper::make_slow_query_time_idx_mutation_dat
 std::vector<cql3::raw_value> trace_keyspace_helper::make_event_mutation_data(one_session_records& session_records, const event_record& record) {
     auto backend_state_ptr = static_cast<trace_keyspace_backend_sesssion_state*>(session_records.backend_state_ptr.get());
 
+    std::vector<std::pair<data_value, data_value>> parameters_values_vector;
+    parameters_values_vector.reserve(record.metrics_values.size());
+    std::for_each(record.metrics_values.begin(), record.metrics_values.end(), [&parameters_values_vector] (auto& val_pair) { parameters_values_vector.emplace_back(val_pair.first, val_pair.second); });
+    auto my_map_type = map_type_impl::get_instance(utf8_type, double_type, true);
+
     std::vector<cql3::raw_value> values({
         cql3::raw_value::make_value(uuid_type->decompose(session_records.session_id)),
         cql3::raw_value::make_value(timeuuid_type->decompose(utils::UUID_gen::get_time_UUID(table_helper::make_monotonic_UUID_tp(backend_state_ptr->last_nanos, record.event_time_point)))),
@@ -337,6 +344,7 @@ std::vector<cql3::raw_value> trace_keyspace_helper::make_event_mutation_data(one
         cql3::raw_value::make_value(utf8_type->decompose(_local_tracing.get_thread_name())),
         cql3::raw_value::make_value(long_type->decompose(int64_t(session_records.parent_id.get_id()))),
         cql3::raw_value::make_value(long_type->decompose(int64_t(session_records.my_span_id.get_id()))),
+        cql3::raw_value::make_value(make_map_value(my_map_type, map_type_impl::native_type(std::move(parameters_values_vector))).serialize()),
         cql3::raw_value::make_value(int32_type->decompose((int32_t)(session_records.ttl.count())))
     });
 
