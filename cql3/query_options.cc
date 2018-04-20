@@ -172,6 +172,11 @@ std::experimental::optional<db::consistency_level> query_options::get_serial_con
     return get_specific_options().serial_consistency;
 }
 
+const std::experimental::optional<std::vector<sstring_view>>& query_options::get_names() const noexcept
+{
+    return _names;
+}
+
 api::timestamp_type query_options::get_timestamp(service::query_state& state) const
 {
     auto tstamp = get_specific_options().timestamp;
