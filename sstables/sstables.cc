@@ -4050,4 +4050,12 @@ lw_shared_ptr_deleter<sstables::sstable>::dispose(sstables::sstable* s) {
     delete s;
 }
 
+namespace internal {
+
+template <>
+sstables::sstable* lw_shared_ptr_accessors<sstables::sstable, void_t<decltype(lw_shared_ptr_deleter<sstables::sstable>{})>>::to_value(lw_shared_ptr_counter_base* counter) {
+    return static_cast<sstables::sstable*>(counter);
+}
+
+}
 }

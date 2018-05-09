@@ -31,7 +31,6 @@
 #include "core/enum.hh"
 #include "core/shared_ptr.hh"
 #include "core/distributed.hh"
-#include <seastar/core/shared_ptr_incomplete.hh>
 #include <unordered_set>
 #include <unordered_map>
 #include "types.hh"
