@@ -41,6 +41,7 @@
 #include "raw/batch_statement.hh"
 #include "db/config.hh"
 #include <seastar/core/execution_stage.hh>
+#include "tracing/trace_state.hh"
 
 namespace {
 

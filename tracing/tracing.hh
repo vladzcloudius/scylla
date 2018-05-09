@@ -680,3 +680,10 @@ inline span_id span_id::make_span_id() {
     return 1 + (tracing::get_local_tracing_instance().get_next_rand_uint64() << 1);
 }
 }
+
+namespace seastar {
+template<>
+struct lw_shared_ptr_deleter<tracing::trace_state> {
+    static void dispose(tracing::trace_state* sst);
+};
+}

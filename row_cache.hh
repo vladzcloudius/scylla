@@ -36,7 +36,7 @@
 #include "utils/histogram.hh"
 #include "partition_version.hh"
 #include "utils/estimated_histogram.hh"
-#include "tracing/trace_state.hh"
+#include "tracing/tracing.hh"
 #include <seastar/core/metrics_registration.hh>
 #include "flat_mutation_reader.hh"
 

@@ -52,7 +52,7 @@
 #include "db/hints/manager.hh"
 #include "utils/histogram.hh"
 #include "utils/estimated_histogram.hh"
-#include "tracing/trace_state.hh"
+#include "tracing/tracing.hh"
 #include <seastar/core/metrics.hh>
 #include "frozen_mutation.hh"
 #include "db/config.hh"

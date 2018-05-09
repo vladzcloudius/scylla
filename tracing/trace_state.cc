@@ -146,3 +146,19 @@ void trace_state::stop_foreground_and_write() noexcept {
     }
 }
 }
+
+namespace seastar {
+
+void lw_shared_ptr_deleter<tracing::trace_state>::dispose(tracing::trace_state* tr) {
+    delete tr;
+}
+
+namespace internal {
+
+template<>
+tracing::trace_state* lw_shared_ptr_accessors<tracing::trace_state, void_t<decltype(lw_shared_ptr_deleter<tracing::trace_state>{})>>::to_value(lw_shared_ptr_counter_base* counter) {
+    return static_cast<tracing::trace_state*>(counter);
+}
+
+}
+}

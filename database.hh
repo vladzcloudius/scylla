@@ -75,7 +75,7 @@
 #include <seastar/core/rwlock.hh>
 #include <seastar/core/shared_future.hh>
 #include <seastar/core/metrics_registration.hh>
-#include "tracing/trace_state.hh"
+#include "tracing/tracing.hh"
 #include "db/view/view.hh"
 #include "db/view/row_locking.hh"
 #include "lister.hh"
