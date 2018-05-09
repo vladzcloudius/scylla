@@ -41,6 +41,7 @@
 
 #define CRYPTOPP_ENABLE_NAMESPACE_WEAK 1
 
+#include "tracing/trace_state.hh"
 #include "cql3/query_processor.hh"
 
 #include <cryptopp/md5.h>

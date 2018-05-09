@@ -53,7 +53,7 @@ namespace tracing {
 
 extern logging::logger trace_state_logger;
 
-class trace_state final {
+class trace_state final : public enable_lw_shared_from_this<trace_state> {
 public:
     // A primary session may be in 3 states:
     //   - "inactive": between the creation and a begin() call.

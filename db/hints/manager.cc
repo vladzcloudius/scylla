@@ -23,6 +23,7 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/core/gate.hh>
+#include "tracing/trace_state.hh"
 #include "service/storage_service.hh"
 #include "utils/div_ceil.hh"
 #include "db/config.hh"
