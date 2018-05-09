@@ -51,7 +51,6 @@
 #include "auth/authenticator.hh"
 #include "auth/permission.hh"
 #include "tracing/tracing.hh"
-#include "tracing/trace_state.hh"
 
 namespace auth {
 class resource;

@@ -39,6 +39,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "tracing/trace_state.hh"
 #include "cql3/statements/select_statement.hh"
 #include "cql3/statements/raw/select_statement.hh"
 

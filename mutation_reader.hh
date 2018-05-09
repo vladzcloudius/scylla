@@ -28,7 +28,7 @@
 #include "core/future.hh"
 #include "core/future-util.hh"
 #include "core/do_with.hh"
-#include "tracing/trace_state.hh"
+#include "tracing/tracing.hh"
 #include "flat_mutation_reader.hh"
 #include "reader_concurrency_semaphore.hh"
 
