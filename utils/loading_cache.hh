@@ -95,6 +95,10 @@ public:
         return _lru_entry_ptr;
     }
 
+    lru_entry* lru_entry_ptr() const noexcept {
+        return _lru_entry_ptr;
+    }
+
 private:
     void touch() noexcept {
         assert(_lru_entry_ptr);
@@ -386,6 +390,15 @@ public:
         }, [this] (ts_value_lru_entry* p) {
             loading_cache::destroy_ts_value(p);
         });
+    }
+
+    void remove(const Key& k) {
+        auto it = set_find(k);
+        if (it == set_end()) {
+            return;
+        }
+
+        _lru_list.erase_and_dispose(_lru_list.iterator_to(*it->lru_entry_ptr()), [this] (ts_value_lru_entry* p) { loading_cache::destroy_ts_value(p); });
     }
 
     size_t size() const {
