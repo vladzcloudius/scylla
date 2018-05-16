@@ -229,6 +229,24 @@ SEASTAR_TEST_CASE(test_loading_cache_loading_same_key) {
     });
 }
 
+SEASTAR_TEST_CASE(test_loading_cache_removing_key) {
+    return seastar::async([] {
+        using namespace std::chrono;
+        load_count = 0;
+        utils::loading_cache<int, sstring> loading_cache(num_loaders, 100s, test_logger);
+        auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
+
+        prepare().get();
+
+        loading_cache.get_ptr(0, loader).discard_result().get();
+        BOOST_REQUIRE_EQUAL(load_count, 1);
+        BOOST_REQUIRE_EQUAL(loading_cache.find(0) == loading_cache.end(), false);
+
+        loading_cache.remove(0);
+        BOOST_REQUIRE_EQUAL(loading_cache.find(0) == loading_cache.end(), true);
+    });
+}
+
 SEASTAR_TEST_CASE(test_loading_cache_loading_different_keys) {
     return seastar::async([] {
         using namespace std::chrono;
