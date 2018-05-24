@@ -227,7 +227,7 @@ void reconnectable_snitch_helper::reconnect(gms::inet_address public_address, gm
     auto& sn_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
 
     if (sn_ptr->get_datacenter(public_address) == _local_dc &&
-        ms.get_preferred_ip(public_address) == local_address) {
+        ms.get_preferred_ip(public_address) != local_address) {
         //
         // First, store the local address in the system_table...
         //
