@@ -222,11 +222,12 @@ void reconnectable_snitch_helper::reconnect(gms::inet_address public_address, co
 }
 
 void reconnectable_snitch_helper::reconnect(gms::inet_address public_address, gms::inet_address local_address) {
+    logger().info("reconnect: public address {}, local address {}", public_address, local_address);
     auto& ms = netw::get_local_messaging_service();
     auto& sn_ptr = locator::i_endpoint_snitch::get_local_snitch_ptr();
 
     if (sn_ptr->get_datacenter(public_address) == _local_dc &&
-        ms.get_preferred_ip(public_address) != local_address) {
+        ms.get_preferred_ip(public_address) == local_address) {
         //
         // First, store the local address in the system_table...
         //
@@ -245,12 +246,14 @@ void reconnectable_snitch_helper::reconnect(gms::inet_address public_address, gm
             local_ms.remove_rpc_client(id);
         }).get();
 
-        logger().debug("Initiated reconnect to an Internal IP {} for the {}", local_address, public_address);
+        logger().info("Initiated reconnect to an Internal IP {} for the {}", local_address, public_address);
     }
 }
 
 reconnectable_snitch_helper::reconnectable_snitch_helper(sstring local_dc)
-        : _local_dc(local_dc) {}
+        : _local_dc(local_dc) {
+    logger().info("reconnectable_snitch_helper for {} is created", local_dc);
+}
 
 void reconnectable_snitch_helper::before_change(gms::inet_address endpoint, gms::endpoint_state cs, gms::application_state new_state_key, const gms::versioned_value& new_value) {
     // do nothing.
@@ -264,6 +267,7 @@ void reconnectable_snitch_helper::on_join(gms::inet_address endpoint, gms::endpo
 }
 
 void reconnectable_snitch_helper::on_change(gms::inet_address endpoint, gms::application_state state, const gms::versioned_value& value) {
+    logger().debug("endpoint={} on_change:     app_state={}, versioned_value={}", endpoint, state, value);
     if (state == gms::application_state::INTERNAL_IP) {
         reconnect(endpoint, value);
     }
