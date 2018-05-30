@@ -860,7 +860,7 @@ future<response_type> cql_server::connection::process_query(uint16_t stream, byt
     tracing::set_page_size(query_state.get_trace_state(), options.get_page_size());
     tracing::set_consistency_level(query_state.get_trace_state(), options.get_consistency());
     tracing::set_optional_serial_consistency_level(query_state.get_trace_state(), options.get_serial_consistency());
-    tracing::set_query(query_state.get_trace_state(), query.to_string());
+    tracing::add_query(query_state.get_trace_state(), query.to_string());
     tracing::set_user_timestamp(query_state.get_trace_state(), options.get_specific_options().timestamp);
 
     tracing::begin(query_state.get_trace_state(), "Execute CQL3 query", query_state.get_client_state().get_client_address());
@@ -878,7 +878,7 @@ future<response_type> cql_server::connection::process_prepare(uint16_t stream, b
 {
     auto query = read_long_string_view(buf).to_string();
 
-    tracing::set_query(client_state_.get_trace_state(), query);
+    tracing::add_query(client_state_.get_trace_state(), query);
     tracing::begin(client_state_.get_trace_state(), "Preparing CQL3 query", client_state_.get_client_address());
 
     auto cpu_id = engine().cpu_id();
@@ -943,7 +943,7 @@ future<response_type> cql_server::connection::process_execute(uint16_t stream, b
     tracing::set_page_size(client_state.get_trace_state(), options.get_page_size());
     tracing::set_consistency_level(client_state.get_trace_state(), options.get_consistency());
     tracing::set_optional_serial_consistency_level(client_state.get_trace_state(), options.get_serial_consistency());
-    tracing::set_query(client_state.get_trace_state(), prepared->raw_cql_statement);
+    tracing::add_query(client_state.get_trace_state(), prepared->raw_cql_statement);
 
     tracing::begin(client_state.get_trace_state(), seastar::value_of([&id] { return seastar::format("Execute CQL3 prepared query [{}]", id); }),
                    client_state.get_client_address());
@@ -1027,6 +1027,7 @@ cql_server::connection::process_batch(uint16_t stream, bytes_view buf, service::
 
         ::shared_ptr<cql3::statements::modification_statement> modif_statement_ptr = static_pointer_cast<cql3::statements::modification_statement>(ps->statement);
         tracing::add_table_name(client_state.get_trace_state(), modif_statement_ptr->keyspace(), modif_statement_ptr->column_family());
+        tracing::add_query(client_state.get_trace_state(), ps->raw_cql_statement);
 
         modifications.emplace_back(std::move(modif_statement_ptr), needs_authorization);
 

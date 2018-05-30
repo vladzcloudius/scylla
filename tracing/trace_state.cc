@@ -73,8 +73,16 @@ void trace_state::build_parameters_map() {
         params_map.emplace("page_size", seastar::format("{:d}", *vals.page_size));
     }
 
-    if (vals.query) {
-        params_map.emplace("query", *vals.query);
+    auto& queries = vals.queries;
+    if (!queries.empty()) {
+        if (queries.size() == 1) {
+            params_map.emplace("query", queries[0]);
+        } else {
+            // BATCH
+            for (size_t i = 0; i < queries.size(); ++i) {
+                params_map.emplace(format("query[{:d}]", i), queries[i]);
+            }
+        }
     }
 
     if (vals.user_timestamp) {
