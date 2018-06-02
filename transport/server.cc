@@ -46,6 +46,8 @@
 #include "service/query_state.hh"
 #include "service/client_state.hh"
 #include "exceptions/exceptions.hh"
+#include "db/system_keyspace.hh"
+#include "db/query_context.hh"
 
 #include "auth/authenticator.hh"
 
@@ -298,6 +300,11 @@ cql_server::cql_server(distributed<service::storage_proxy>& proxy, distributed<c
                                             "The first derivative of this value shows how often we block due to memory exhaustion in the \"CQL transport\" component.", _max_request_size))),
 
     });
+
+    std::vector<dht::token> local_tokens = service::get_storage_service().local().get_token_metadata().get_tokens(utils::fb_utilities::get_broadcast_address());
+    boost::for_each(local_tokens | boost::adaptors::filtered([] (const dht::token& t) { return dht::global_partitioner().shard_of(t) == engine().cpu_id(); }),
+                    [this] (const dht::token& t) { _shard_tokens.emplace(t); }
+    );
 }
 
 future<> cql_server::stop() {
@@ -357,13 +364,15 @@ cql_server::do_accepts(int which, bool keepalive, ipv4_addr server_addr) {
             auto conn = make_shared<connection>(*this, server_addr, std::move(fd), std::move(addr));
             ++_connects;
             ++_connections;
-            conn->process().then_wrapped([this, conn] (future<> f) {
-                --_connections;
-                try {
-                    f.get();
-                } catch (...) {
-                    clogger.debug("connection error: {}", std::current_exception());
-                }
+            conn->add_connection_to_token_record().then([this, conn] {
+                return conn->process().then_wrapped([this, conn] (future<> f) {
+                    --_connections;
+                    try {
+                        f.get();
+                    } catch (...) {
+                        clogger.debug("connection error: {}", std::current_exception());
+                    }
+                });
             });
             return stop_iteration::no;
         }).handle_exception([] (auto ep) {
@@ -590,6 +599,26 @@ cql_server::connection::~connection() {
     _server.maybe_idle();
 }
 
+future<> cql_server::connection::add_connection_to_token_record() {
+    using namespace db::system_keyspace;
+
+    sstring req = sprint("INSERT INTO system.%s (client_address, client_port, tokens) VALUES (?, ?, ?)", CONNECTION_TOKENS);
+    auto set_type = set_type_impl::get_instance(utf8_type, true);
+    return db::execute_cql(req, _client_state.get_client_address().addr(), _client_state.get_client_port(), make_set_value(set_type, prepare_tokens(_server._shard_tokens))).discard_result().then([] {
+        return force_blocking_flush(CONNECTION_TOKENS);
+    });
+}
+
+future<> cql_server::connection::remove_connection_to_token_record() {
+    using namespace db::system_keyspace;
+
+    sstring req = sprint("DELETE FROM system.%s WHERE client_address = ? AND client_port = ?", CONNECTION_TOKENS);
+    auto set_type = set_type_impl::get_instance(utf8_type, true);
+    return db::execute_cql(req, _client_state.get_client_address().addr(), _client_state.get_client_port()).discard_result().then([] {
+        return force_blocking_flush(CONNECTION_TOKENS);
+    });
+}
+
 future<> cql_server::connection::process()
 {
     return do_until([this] {
@@ -612,7 +641,9 @@ future<> cql_server::connection::process()
         return _pending_requests_gate.close().then([this] {
             _server._notifier->unregister_connection(this);
             return _ready_to_respond.finally([this] {
-                return _write_buf.close();
+                return _write_buf.close().finally([this] {
+                    return remove_connection_to_token_record();
+                });
             });
         });
     });
@@ -625,7 +656,7 @@ future<> cql_server::connection::shutdown()
         _fd.shutdown_output();
     } catch (...) {
     }
-    return make_ready_future<>();
+    return remove_connection_to_token_record();
 }
 
 struct process_request_executor {

@@ -174,6 +174,10 @@ public:
         return gms::inet_address(_remote_address);
     }
 
+    uint16_t get_client_port() const {
+        return ipv4_addr(_remote_address).port;
+    }
+
     client_state(internal_tag)
             : _keyspace("system")
             , _cpu_of_origin(engine().cpu_id())

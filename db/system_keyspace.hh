@@ -87,6 +87,7 @@ static constexpr auto COMPACTION_HISTORY = "compaction_history";
 static constexpr auto SSTABLE_ACTIVITY = "sstable_activity";
 static constexpr auto SIZE_ESTIMATES = "size_estimates";
 static constexpr auto LARGE_PARTITIONS = "large_partitions";
+static constexpr auto CONNECTION_TOKENS = "connection_tokens";
 
 namespace v3 {
 static constexpr auto BATCHES = "batches";
@@ -671,6 +672,8 @@ future<> mark_view_as_built(sstring ks_name, sstring view_name);
 future<> remove_built_view(sstring ks_name, sstring view_name);
 future<std::vector<view_name>> load_built_views();
 future<std::vector<view_build_progress>> load_view_build_progress();
+future<> force_blocking_flush(sstring cfname);
+set_type_impl::native_type prepare_tokens(std::unordered_set<dht::token>& tokens);
 
 } // namespace system_keyspace
 } // namespace db

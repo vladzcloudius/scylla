@@ -118,6 +118,7 @@ private:
     semaphore _memory_available;
     seastar::metrics::metric_groups _metrics;
     std::unique_ptr<event_notifier> _notifier;
+    std::unordered_set<dht::token> _shard_tokens;
 private:
     uint64_t _connects = 0;
     uint64_t _connections = 0;
@@ -180,6 +181,9 @@ private:
         future<> process();
         future<> process_request();
         future<> shutdown();
+
+        future<> add_connection_to_token_record();
+        future<> remove_connection_to_token_record();
     private:
         const ::timeout_config& timeout_config() { return _server.timeout_config(); }
         friend class process_request_executor;

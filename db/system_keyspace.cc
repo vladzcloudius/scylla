@@ -359,6 +359,30 @@ schema_ptr built_indexes() {
     return compactions_in_progress;
 }
 
+/*static*/ schema_ptr connection_tokens() {
+    static thread_local auto connection_tokens = [] {
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, CONNECTION_TOKENS), NAME, CONNECTION_TOKENS,
+        // partition key
+        {{"client_address", inet_addr_type}},
+        // clustering key
+        {{"client_port", int32_type}},
+        // regular columns
+        {
+            {"tokens", set_type_impl::get_instance(utf8_type, true)},
+        },
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "client connection to tokens mapping"
+        )));
+       builder.with_version(generate_schema_version(builder.uuid()));
+       return builder.build(schema_builder::compact_storage::no);
+    }();
+    return connection_tokens;
+}
+
 /*static*/ schema_ptr compaction_history() {
     static thread_local auto compaction_history = [] {
         schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, COMPACTION_HISTORY), NAME, COMPACTION_HISTORY,
@@ -1007,7 +1031,6 @@ static future<> setup_version() {
 }
 
 future<> check_health();
-future<> force_blocking_flush(sstring cfname);
 
 // Changing the real load_dc_rack_info into a future would trigger a tidal wave of futurization that would spread
 // even into simple string operations like get_rack() / get_dc(). We will cache those at startup, and then change
@@ -1588,7 +1611,7 @@ std::vector<schema_ptr> all_tables() {
     std::copy(schema_tables.begin(), schema_tables.end(), std::back_inserter(r));
     r.insert(r.end(), { built_indexes(), hints(), batchlog(), paxos(), local(),
                     peers(), peer_events(), range_xfers(),
-                    compactions_in_progress(), compaction_history(),
+                    compactions_in_progress(), compaction_history(), connection_tokens(),
                     sstable_activity(), size_estimates(), large_partitions(), v3::views_builds_in_progress(), v3::built_views(),
                     v3::scylla_views_builds_in_progress(),
     });
