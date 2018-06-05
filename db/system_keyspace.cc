@@ -359,6 +359,28 @@ schema_ptr built_indexes() {
     return compactions_in_progress;
 }
 
+/*static*/ schema_ptr connection_shard() {
+    static thread_local auto connection_shard = [] {
+        schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, CONNECTION_SHARD), NAME, CONNECTION_SHARD,
+        // partition key
+        {{"shard", int32_type}},
+        // clustering key
+        {},
+        // regular columns
+        {},
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        "shard ID of a corresponding client connection"
+        )));
+       builder.with_version(generate_schema_version(builder.uuid()));
+       return builder.build(schema_builder::compact_storage::no);
+    }();
+    return connection_shard;
+}
+
 /*static*/ schema_ptr compaction_history() {
     static thread_local auto compaction_history = [] {
         schema_builder builder(make_lw_shared(schema(generate_legacy_id(NAME, COMPACTION_HISTORY), NAME, COMPACTION_HISTORY,
@@ -1588,7 +1610,7 @@ std::vector<schema_ptr> all_tables() {
     std::copy(schema_tables.begin(), schema_tables.end(), std::back_inserter(r));
     r.insert(r.end(), { built_indexes(), hints(), batchlog(), paxos(), local(),
                     peers(), peer_events(), range_xfers(),
-                    compactions_in_progress(), compaction_history(),
+                    compactions_in_progress(), compaction_history(), connection_shard(),
                     sstable_activity(), size_estimates(), large_partitions(), v3::views_builds_in_progress(), v3::built_views(),
                     v3::scylla_views_builds_in_progress(),
     });

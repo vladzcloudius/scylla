@@ -178,7 +178,7 @@ future<> service::client_state::has_access(const sstring& ks, auth::permission p
 
     static thread_local std::unordered_set<auth::resource> readable_system_resources = [] {
         std::unordered_set<auth::resource> tmp;
-        for (auto cf : { db::system_keyspace::LOCAL, db::system_keyspace::PEERS }) {
+        for (auto cf : { db::system_keyspace::LOCAL, db::system_keyspace::PEERS, db::system_keyspace::CONNECTION_SHARD }) {
             tmp.insert(auth::make_data_resource(db::system_keyspace::NAME, cf));
         }
         for (auto cf : db::schema_tables::ALL) {
@@ -190,6 +190,19 @@ future<> service::client_state::has_access(const sstring& ks, auth::permission p
     if (p == auth::permission::SELECT && readable_system_resources.count(resource) != 0) {
         return make_ready_future();
     }
+
+    static thread_local std::unordered_set<auth::resource> read_only_resources = [] {
+        std::unordered_set<auth::resource> tmp;
+        for (auto cf : { db::system_keyspace::CONNECTION_SHARD }) {
+            tmp.insert(auth::make_data_resource(db::system_keyspace::NAME, cf));
+        }
+        return tmp;
+    }();
+
+    if (read_only_resources.count(resource)) {
+        throw exceptions::unauthorized_exception(format("{} is a read-only resource", resource));
+    }
+
     if (alteration_permissions.contains(p)) {
         if (auth::is_protected(*_auth_service, resource)) {
             throw exceptions::unauthorized_exception(sprint("%s is protected", resource));
@@ -253,6 +266,7 @@ auth::service* service::client_state::local_auth_service_copy(const service::cli
 service::client_state::client_state(service::client_state::request_copy_tag, const service::client_state& orig, api::timestamp_type ts)
         : _keyspace(orig._keyspace)
         , _cpu_of_origin(engine().cpu_id())
+        , _connection_cpu(orig._connection_cpu)
         , _user(local_user_copy(orig))
         , _auth_state(orig._auth_state)
         , _is_internal(orig._is_internal)

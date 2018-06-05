@@ -72,6 +72,7 @@ private:
     sstring _keyspace;
     tracing::trace_state_ptr _trace_state_ptr;
     unsigned _cpu_of_origin;
+    unsigned _connection_cpu;
 #if 0
     private static final Logger logger = LoggerFactory.getLogger(ClientState.class);
     public static final SemanticVersion DEFAULT_CQL_VERSION = org.apache.cassandra.cql3.QueryProcessor.CQL_VERSION;
@@ -146,6 +147,10 @@ public:
         _auth_state = new_state;
     }
 
+    unsigned get_connection_cpu() const noexcept {
+        return _connection_cpu;
+    }
+
     /// \brief A cross-shard copy-constructor.
     /// Copies everything that may be copied on the remote shard (e.g. _user is out since it's a shared_ptr).
     /// The created copy of the original client state that may be safely used in the specific request handling flow.
@@ -161,6 +166,7 @@ public:
 
     client_state(external_tag, auth::service& auth_service, const socket_address& remote_address = socket_address(), bool thrift = false)
             : _cpu_of_origin(engine().cpu_id())
+            , _connection_cpu(engine().cpu_id())
             , _is_internal(false)
             , _is_thrift(thrift)
             , _remote_address(remote_address)
@@ -177,6 +183,7 @@ public:
     client_state(internal_tag)
             : _keyspace("system")
             , _cpu_of_origin(engine().cpu_id())
+            , _connection_cpu(engine().cpu_id())
             , _is_internal(true)
             , _is_thrift(false)
             , _remote_address(ipv4_addr())

@@ -39,6 +39,7 @@
  * along with Scylla.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "db/system_keyspace.hh"
 #include "cql3/statements/select_statement.hh"
 #include "cql3/statements/raw/select_statement.hh"
 
@@ -599,6 +600,31 @@ indexed_table_select_statement::prepare(database& db,
 
 }
 
+::shared_ptr<cql3::statements::select_statement>
+connection_shard_select_statement::prepare(database& db,
+                                           schema_ptr schema,
+                                           uint32_t bound_terms,
+                                           ::shared_ptr<parameters> parameters,
+                                           ::shared_ptr<selection::selection> selection,
+                                           ::shared_ptr<restrictions::statement_restrictions> restrictions,
+                                           bool is_reversed,
+                                           ordering_comparator_type ordering_comparator,
+                                           ::shared_ptr<term> limit,
+                                           cql_stats &stats)
+{
+    // TODO: check something maybe
+    return ::make_shared<cql3::statements::connection_shard_select_statement>(
+            schema,
+            bound_terms,
+            parameters,
+            std::move(selection),
+            std::move(restrictions),
+            is_reversed,
+            std::move(ordering_comparator),
+            limit,
+            stats);
+
+}
 
 stdx::optional<secondary_index::index> indexed_table_select_statement::find_idx(database& db,
                                                                                 schema_ptr schema,
@@ -627,6 +653,16 @@ indexed_table_select_statement::indexed_table_select_statement(schema_ptr schema
                                                            const secondary_index::index& index)
     : select_statement{schema, bound_terms, parameters, selection, restrictions, is_reversed, ordering_comparator, limit, stats}
     , _index{index}
+{}
+
+connection_shard_select_statement::connection_shard_select_statement(schema_ptr schema, uint32_t bound_terms,
+                                                           ::shared_ptr<parameters> parameters,
+                                                           ::shared_ptr<selection::selection> selection,
+                                                           ::shared_ptr<restrictions::statement_restrictions> restrictions,
+                                                           bool is_reversed,
+                                                           ordering_comparator_type ordering_comparator,
+                                                           ::shared_ptr<term> limit, cql_stats &stats)
+    : select_statement{schema, bound_terms, parameters, selection, restrictions, is_reversed, ordering_comparator, limit, stats}
 {}
 
 future<shared_ptr<cql_transport::messages::result_message>>
@@ -715,6 +751,28 @@ indexed_table_select_statement::do_execute(service::storage_proxy& proxy,
             return this->execute(proxy, command, std::move(primary_keys), state, options, now);
         });
     }
+}
+
+future<shared_ptr<cql_transport::messages::result_message>>
+connection_shard_select_statement::do_execute(service::storage_proxy& proxy,
+                                              service::query_state& state,
+                                              const query_options& options) {
+    tracing::add_table_name(state.get_trace_state(), keyspace(), column_family());
+
+    static auto make_column = [](sstring name) {
+        return ::make_shared<column_specification>(
+                db::system_keyspace::NAME,
+                db::system_keyspace::CONNECTION_SHARD,
+                ::make_shared<column_identifier>(std::move(name), true),
+                int32_type);
+    };
+    static thread_local const std::vector<::shared_ptr<column_specification>> metadata({ make_column("shard") });
+
+    std::unique_ptr<result_set> rs = std::make_unique<result_set>(metadata);
+
+    rs->add_row(std::vector<bytes_opt>{ int32_type->decompose(int32_t(state.get_client_state().get_connection_cpu())) });
+
+    return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(::make_shared<cql_transport::messages::result_message::rows>(std::move(rs)));
 }
 
 // Utility function for getting the schema of the materialized view used for
@@ -958,6 +1016,22 @@ std::unique_ptr<prepared_statement> select_statement::prepare(database& db, cql_
     if (restrictions->uses_secondary_indexing()) {
         stmt = indexed_table_select_statement::prepare(
                 db,
+                schema,
+                bound_names->size(),
+                _parameters,
+                std::move(selection),
+                std::move(restrictions),
+                is_reversed_,
+                std::move(ordering_comparator),
+                prepare_limit(db, bound_names),
+                stats);
+    } else if (schema->ks_name() == db::system_keyspace::NAME && schema->cf_name() == db::system_keyspace::CONNECTION_SHARD) {
+        // Don't allow WHERE or similar restrictions for this table
+        if (restrictions->is_restricted(schema->get_column_definition("shard"))) {
+            throw exceptions::unsupported_operation_exception("this table doesn't support queries with restrictions");
+        }
+
+        stmt = ::make_shared<cql3::statements::connection_shard_select_statement>(
                 schema,
                 bound_names->size(),
                 _parameters,

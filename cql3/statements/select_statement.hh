@@ -213,6 +213,33 @@ private:
     }
 };
 
+class connection_shard_select_statement : public select_statement {
+public:
+    static ::shared_ptr<cql3::statements::select_statement> prepare(database& db,
+                                                                    schema_ptr schema,
+                                                                    uint32_t bound_terms,
+                                                                    ::shared_ptr<parameters> parameters,
+                                                                    ::shared_ptr<selection::selection> selection,
+                                                                    ::shared_ptr<restrictions::statement_restrictions> restrictions,
+                                                                    bool is_reversed,
+                                                                    ordering_comparator_type ordering_comparator,
+                                                                    ::shared_ptr<term> limit,
+                                                                    cql_stats &stats);
+
+    connection_shard_select_statement(schema_ptr schema,
+                                      uint32_t bound_terms,
+                                      ::shared_ptr<parameters> parameters,
+                                      ::shared_ptr<selection::selection> selection,
+                                      ::shared_ptr<restrictions::statement_restrictions> restrictions,
+                                      bool is_reversed,
+                                      ordering_comparator_type ordering_comparator,
+                                      ::shared_ptr<term> limit,
+                                      cql_stats &stats);
+private:
+    virtual future<::shared_ptr<cql_transport::messages::result_message>> do_execute(service::storage_proxy& proxy,
+                                                                                     service::query_state& state, const query_options& options) override;
+};
+
 }
 
 }
