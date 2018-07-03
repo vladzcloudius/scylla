@@ -307,9 +307,10 @@ future<> range_streamer::do_stream_async() {
                     ranges_to_stream.clear();
                 };
                 try {
-                    for (auto it = range_vec.begin(); it < range_vec.end();) {
+                    for (auto it = range_vec.begin(); it != range_vec.end();) {
                         ranges_to_stream.push_back(*it);
-                        it = range_vec.erase(it);
+                        range_vec.pop_front();
+                        it = range_vec.begin();
                         nr_ranges_streamed++;
                         if (ranges_to_stream.size() < nr_ranges_per_stream_plan) {
                             continue;

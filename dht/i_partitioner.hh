@@ -77,8 +77,8 @@ class ring_position;
 using partition_range = nonwrapping_range<ring_position>;
 using token_range = nonwrapping_range<token>;
 
-using partition_range_vector = std::vector<partition_range>;
-using token_range_vector = std::vector<token_range>;
+using partition_range_vector = std::deque<partition_range>;
+using token_range_vector = std::deque<token_range>;
 
 enum class token_kind {
     before_all_keys,

@@ -127,8 +127,7 @@ insert_token_range_to_sorted_container_while_unwrapping(
                 dht::token_range::bound(prev_tok, false),
                 stdx::nullopt);
         // Insert in front to maintain sorded order
-        ret.emplace(
-                ret.begin(),
+        ret.emplace_front(
                 stdx::nullopt,
                 dht::token_range::bound(tok, true));
     }

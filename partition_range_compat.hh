@@ -37,14 +37,14 @@ using wrapping_partition_range = wrapping_range<dht::ring_position>;
 // unwraps a vector of wrapping ranges into a vector of nonwrapping ranges
 // if the vector happens to be sorted by the left bound, it remains sorted
 template <typename T, typename Comparator>
-std::vector<nonwrapping_range<T>>
+utils::chunked_vector<nonwrapping_range<T>>
 unwrap(std::vector<wrapping_range<T>>&& v, Comparator&& cmp) {
-    std::vector<nonwrapping_range<T>> ret;
+    utils::chunked_vector<nonwrapping_range<T>> ret;
     ret.reserve(v.size() + 1);
     for (auto&& wr : v) {
         if (wr.is_wrap_around(cmp)) {
             auto&& p = std::move(wr).unwrap();
-            ret.insert(ret.begin(), nonwrapping_range<T>(std::move(p.first)));
+            ret.emplace_front(nonwrapping_range<T>(std::move(p.first)));
             ret.emplace_back(std::move(p.second));
         } else {
             ret.emplace_back(std::move(wr));
@@ -56,14 +56,14 @@ unwrap(std::vector<wrapping_range<T>>&& v, Comparator&& cmp) {
 // unwraps a vector of wrapping ranges into a vector of nonwrapping ranges
 // if the vector happens to be sorted by the left bound, it remains sorted
 template <typename T, typename Comparator>
-std::vector<nonwrapping_range<T>>
+utils::chunked_vector<nonwrapping_range<T>>
 unwrap(const std::vector<wrapping_range<T>>& v, Comparator&& cmp) {
-    std::vector<nonwrapping_range<T>> ret;
+    utils::chunked_vector<nonwrapping_range<T>> ret;
     ret.reserve(v.size() + 1);
     for (auto&& wr : v) {
         if (wr.is_wrap_around(cmp)) {
             auto&& p = wr.unwrap();
-            ret.insert(ret.begin(), nonwrapping_range<T>(p.first));
+            ret.emplace_front(nonwrapping_range<T>(p.first));
             ret.emplace_back(p.second);
         } else {
             ret.emplace_back(wr);
@@ -74,7 +74,7 @@ unwrap(const std::vector<wrapping_range<T>>& v, Comparator&& cmp) {
 
 template <typename T>
 std::vector<wrapping_range<T>>
-wrap(const std::vector<nonwrapping_range<T>>& v) {
+wrap(const utils::chunked_vector<nonwrapping_range<T>>& v) {
     // re-wrap (-inf,x) ... (y, +inf) into (y, x):
     if (v.size() >= 2 && !v.front().start() && !v.back().end()) {
         auto ret = std::vector<wrapping_range<T>>();
@@ -88,7 +88,7 @@ wrap(const std::vector<nonwrapping_range<T>>& v) {
 
 template <typename T>
 std::vector<wrapping_range<T>>
-wrap(std::vector<nonwrapping_range<T>>&& v) {
+wrap(utils::chunked_vector<nonwrapping_range<T>>&& v) {
     // re-wrap (-inf,x) ... (y, +inf) into (y, x):
     if (v.size() >= 2 && !v.front().start() && !v.back().end()) {
         auto ret = std::vector<wrapping_range<T>>();

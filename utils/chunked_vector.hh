@@ -51,13 +51,14 @@ class chunked_vector {
     // Each chunk holds max_chunk_capacity() items, except possibly the last
     utils::small_vector<chunk_ptr, 1> _chunks;
     size_t _size = 0;
+    size_t _begin_pos = 0;
     size_t _capacity = 0;
 private:
     static size_t max_chunk_capacity() {
         return std::max(max_contiguous_allocation / sizeof(T), size_t(1));
     }
     void reserve_for_push_back() {
-        if (_size == _capacity) {
+        if (_begin_pos + _size == _capacity) {
             do_reserve_for_push_back();
         }
     }
@@ -65,7 +66,8 @@ private:
     void make_room(size_t n);
     chunk_ptr new_chunk(size_t n);
     T* addr(size_t i) const {
-        return &_chunks[i / max_chunk_capacity()][i % max_chunk_capacity()];
+        size_t pos = _begin_pos + i;
+        return &_chunks[pos / max_chunk_capacity()][pos % max_chunk_capacity()];
     }
     void check_bounds(size_t i) const {
         if (i >= _size) {
@@ -87,6 +89,7 @@ public:
     chunked_vector(chunked_vector&& x) noexcept;
     template <typename Iterator>
     chunked_vector(Iterator begin, Iterator end);
+    chunked_vector(std::initializer_list<T> values);
     explicit chunked_vector(size_t n, const T& value = T());
     ~chunked_vector();
     chunked_vector& operator=(const chunked_vector& x);
@@ -130,15 +133,52 @@ public:
         ++_size;
         return ret;
     }
+
+    template <typename... Args>
+    T& emplace_front(Args&&... args) {
+        if (empty()) {
+            return emplace_back(std::forward<Args>(args)...);
+        }
+
+        if (_begin_pos > 0) {
+            ++_size;
+            --_begin_pos;
+            *addr(_begin_pos) = T(std::forward<Args>(args)...);
+            return *addr(_begin_pos);
+        }
+
+        emplace_back(std::move(*addr(size() - 1)));
+        for (size_t i = size() - 2; i >= 0; --i) {
+            *addr(i + 1) = std::move(*addr(i));
+        }
+
+        *addr(0) = T(std::forward<Args>(args)...);
+        return *addr(0);
+    }
+
     void pop_back() {
         --_size;
         addr(_size)->~T();
     }
+
+    void pop_front() {
+        --_size;
+        addr(0)->~T();
+        ++_begin_pos;
+    }
+
     const T& back() const {
         return *addr(_size - 1);
     }
     T& back() {
         return *addr(_size - 1);
+    }
+
+    const T& front() const {
+        return *addr(_begin_pos);
+    }
+    T& front() {
+        return *addr(_begin_pos);
     }
 
     void clear();
@@ -255,6 +295,19 @@ public:
     bool operator!=(const chunked_vector& x) const {
         return !operator==(x);
     }
+
+    friend std::ostream& operator<<(std::ostream& out, const chunked_vector& v) {
+        if (v.empty()) {
+            return out;
+        }
+
+        out << *v.cbegin();
+        for (auto it = std::next(v.cbegin()); it != v.cend(); ++it) {
+            out << ", " << *it;
+        }
+
+        return out;
+    }
 };
 
 
@@ -285,6 +338,11 @@ chunked_vector<T, max_contiguous_allocation>::chunked_vector(Iterator begin, Ite
         shrink_to_fit();
     }
 }
+
+template <typename T, size_t max_contiguous_allocation>
+chunked_vector<T, max_contiguous_allocation>::chunked_vector(std::initializer_list<T> values)
+        : chunked_vector(values.begin(), values.end())
+{}
 
 template <typename T, size_t max_contiguous_allocation>
 chunked_vector<T, max_contiguous_allocation>::chunked_vector(size_t n, const T& value) {
