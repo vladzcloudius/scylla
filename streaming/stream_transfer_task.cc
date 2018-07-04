@@ -67,7 +67,6 @@ stream_transfer_task::~stream_transfer_task() = default;
 
 dht::partition_range_vector to_partition_ranges(const dht::token_range_vector& ranges) {
     dht::partition_range_vector prs;
-    prs.reserve(ranges.size());
     for (auto& range : ranges) {
         prs.push_back(dht::to_partition_range(range));
     }

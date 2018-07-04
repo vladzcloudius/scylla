@@ -317,7 +317,7 @@ modification_statement::read_required_rows(
     });
 }
 
-std::vector<query::clustering_range>
+query::clustering_row_ranges
 modification_statement::create_clustering_ranges(const query_options& options, const json_cache_opt& json_cache) {
     // If the only updated/deleted columns are static, then we don't need clustering columns.
     // And in fact, unless it is an INSERT, we reject if clustering columns are provided as that

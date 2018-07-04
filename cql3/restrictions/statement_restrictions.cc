@@ -73,7 +73,7 @@ public:
         // throw? should not reach?
         return {};
     }
-    std::vector<bounds_range_type> bounds_ranges(const query_options&) const override {
+    std::deque<bounds_range_type> bounds_ranges(const query_options&) const override {
         // throw? should not reach?
         return {};
     }
@@ -397,7 +397,7 @@ dht::partition_range_vector statement_restrictions::get_partition_key_ranges(con
     return _partition_key_restrictions->bounds_ranges(options);
 }
 
-std::vector<query::clustering_range> statement_restrictions::get_clustering_bounds(const query_options& options) const {
+std::deque<query::clustering_range> statement_restrictions::get_clustering_bounds(const query_options& options) const {
     if (_clustering_columns_restrictions->empty()) {
         return {query::clustering_range::make_open_ended_both_sides()};
     }

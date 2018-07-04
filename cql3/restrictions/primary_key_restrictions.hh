@@ -84,7 +84,7 @@ public:
     }
 
     virtual std::vector<ValueType> values_as_keys(const query_options& options) const = 0;
-    virtual std::vector<bounds_range_type> bounds_ranges(const query_options& options) const = 0;
+    virtual std::deque<bounds_range_type> bounds_ranges(const query_options& options) const = 0;
 
     using restrictions::uses_function;
     using restrictions::has_supporting_index;

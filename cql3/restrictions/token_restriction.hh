@@ -88,7 +88,7 @@ public:
         throw exceptions::unsupported_operation_exception();
     }
 
-    std::vector<bounds_range_type> bounds_ranges(const query_options& options) const override {
+    std::deque<bounds_range_type> bounds_ranges(const query_options& options) const override {
         auto get_token_bound = [this, &options](statements::bound b) {
             if (!has_bound(b)) {
                 return is_start(b) ? dht::minimum_token() : dht::maximum_token();

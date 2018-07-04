@@ -162,7 +162,6 @@ void stream_session::init_messaging_service_handler() {
                 dht::partition_range_vector query_ranges;
                 try {
                     auto& cf = db.find_column_family(cf_id);
-                    query_ranges.reserve(ranges.size());
                     for (auto& range : ranges) {
                         query_ranges.push_back(dht::to_partition_range(range));
                     }

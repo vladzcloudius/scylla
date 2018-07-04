@@ -1007,7 +1007,7 @@ private:
 
     uint32_t do_compact(const schema& s,
         gc_clock::time_point now,
-        const std::vector<query::clustering_range>& row_ranges,
+        const std::deque<query::clustering_range>& row_ranges,
         bool reverse,
         uint32_t row_limit,
         can_gc_fn&);
@@ -1019,7 +1019,7 @@ private:
     // must be already in reverse order.
     template<bool reversed, typename Func>
     void trim_rows(const schema& s,
-        const std::vector<query::clustering_range>& row_ranges,
+        const std::deque<query::clustering_range>& row_ranges,
         Func&& func);
 public:
     // Performs the following:
@@ -1039,7 +1039,7 @@ public:
     // The row_limit parameter must be > 0.
     //
     uint32_t compact_for_query(const schema& s, gc_clock::time_point query_time,
-        const std::vector<query::clustering_range>& row_ranges, bool reversed, uint32_t row_limit);
+        const std::deque<query::clustering_range>& row_ranges, bool reversed, uint32_t row_limit);
 
     // Performs the following:
     //   - expires cells based on compaction_time

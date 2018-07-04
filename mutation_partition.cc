@@ -1203,7 +1203,7 @@ size_t mutation_partition::external_memory_usage(const schema& s) const {
 
 template<bool reversed, typename Func>
 void mutation_partition::trim_rows(const schema& s,
-    const std::vector<query::clustering_range>& row_ranges,
+    const std::deque<query::clustering_range>& row_ranges,
     Func&& func)
 {
     static_assert(std::is_same<stop_iteration, std::result_of_t<Func(rows_entry&)>>::value, "Bad func signature");
@@ -1245,7 +1245,7 @@ void mutation_partition::trim_rows(const schema& s,
 
 uint32_t mutation_partition::do_compact(const schema& s,
     gc_clock::time_point query_time,
-    const std::vector<query::clustering_range>& row_ranges,
+    const std::deque<query::clustering_range>& row_ranges,
     bool reverse,
     uint32_t row_limit,
     can_gc_fn& can_gc)
@@ -1311,7 +1311,7 @@ uint32_t
 mutation_partition::compact_for_query(
     const schema& s,
     gc_clock::time_point query_time,
-    const std::vector<query::clustering_range>& row_ranges,
+    const std::deque<query::clustering_range>& row_ranges,
     bool reverse,
     uint32_t row_limit)
 {
@@ -1321,7 +1321,7 @@ mutation_partition::compact_for_query(
 void mutation_partition::compact_for_compaction(const schema& s,
     can_gc_fn& can_gc, gc_clock::time_point compaction_time)
 {
-    static const std::vector<query::clustering_range> all_rows = {
+    static const std::deque<query::clustering_range> all_rows = {
         query::clustering_range::make_open_ended_both_sides()
     };
 

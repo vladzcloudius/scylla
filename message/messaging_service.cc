@@ -688,7 +688,7 @@ void messaging_service::register_stream_mutation_done(std::function<future<> (co
         UUID plan_id, dht::token_range_vector ranges, UUID cf_id, unsigned dst_cpu_id)>&& func) {
     register_handler(this, messaging_verb::STREAM_MUTATION_DONE,
             [func = std::move(func)] (const rpc::client_info& cinfo,
-                    UUID plan_id, std::vector<wrapping_range<dht::token>> ranges,
+                    UUID plan_id, std::deque<wrapping_range<dht::token>> ranges,
                     UUID cf_id, unsigned dst_cpu_id) mutable {
         return func(cinfo, plan_id, compat::unwrap(std::move(ranges)), cf_id, dst_cpu_id);
     });

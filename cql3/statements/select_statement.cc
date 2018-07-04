@@ -801,7 +801,6 @@ indexed_table_select_statement::find_index_partition_ranges(service::storage_pro
                                     cql3::selection::result_set_builder::visitor(builder, *view, *selection));
         auto rs = cql3::untyped_result_set(::make_shared<cql_transport::messages::result_message::rows>(std::move(builder.build())));
         dht::partition_range_vector partition_ranges;
-        partition_ranges.reserve(rs.size());
         // We are reading the list of primary keys as rows of a single
         // partition (in the index view), so they are sorted in
         // lexicographical order (N.B. this is NOT token order!). We need

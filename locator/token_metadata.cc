@@ -354,7 +354,6 @@ token token_metadata::get_predecessor(token t) {
 
 dht::token_range_vector token_metadata::get_primary_ranges_for(std::unordered_set<token> tokens) {
     dht::token_range_vector ranges;
-    ranges.reserve(tokens.size() + 1); // one of the ranges will wrap
     for (auto right : tokens) {
         auto left = get_predecessor(right);
         compat::unwrap_into(

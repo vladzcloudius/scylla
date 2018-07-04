@@ -24,6 +24,7 @@
 #include "stdx.hh"
 #include <list>
 #include <vector>
+#include <deque>
 #include <experimental/optional>
 #include <iosfwd>
 #include <boost/range/algorithm/copy.hpp>
@@ -529,9 +530,9 @@ public:
     // Ranges are not overlapping and ordered.
     // Comparator must define a total ordering on T.
     template<typename Comparator>
-    std::vector<nonwrapping_range> subtract(const nonwrapping_range& other, Comparator&& cmp) const {
+    std::deque<nonwrapping_range> subtract(const nonwrapping_range& other, Comparator&& cmp) const {
         auto subtracted = _range.subtract(other._range, std::forward<Comparator>(cmp));
-        return boost::copy_range<std::vector<nonwrapping_range>>(subtracted | boost::adaptors::transformed([](auto&& r) {
+        return boost::copy_range<std::deque<nonwrapping_range>>(subtracted | boost::adaptors::transformed([](auto&& r) {
             return nonwrapping_range(std::move(r));
         }));
     }
@@ -583,7 +584,7 @@ public:
     // Takes a vector of possibly overlapping ranges and returns a vector containing
     // a set of non-overlapping ranges covering the same values.
     template<typename Comparator>
-    static std::vector<nonwrapping_range> deoverlap(std::vector<nonwrapping_range> ranges, Comparator&& cmp) {
+    static std::deque<nonwrapping_range> deoverlap(std::deque<nonwrapping_range> ranges, Comparator&& cmp) {
         auto size = ranges.size();
         if (size <= 1) {
             return ranges;
@@ -593,8 +594,7 @@ public:
             return wrapping_range<T>::less_than(r1._range.start_bound(), r2._range.start_bound(), cmp);
         });
 
-        std::vector<nonwrapping_range> deoverlapped_ranges;
-        deoverlapped_ranges.reserve(size);
+        std::deque<nonwrapping_range> deoverlapped_ranges;
 
         auto&& current = ranges[0];
         for (auto&& r : ranges | boost::adaptors::sliced(1, ranges.size())) {

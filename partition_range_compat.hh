@@ -23,6 +23,7 @@
 #pragma once
 
 #include <vector>
+#include <deque>
 #include <boost/range/iterator_range_core.hpp>
 #include "range.hh"
 #include "dht/i_partitioner.hh"
@@ -37,10 +38,9 @@ using wrapping_partition_range = wrapping_range<dht::ring_position>;
 // unwraps a vector of wrapping ranges into a vector of nonwrapping ranges
 // if the vector happens to be sorted by the left bound, it remains sorted
 template <typename T, typename Comparator>
-std::vector<nonwrapping_range<T>>
-unwrap(std::vector<wrapping_range<T>>&& v, Comparator&& cmp) {
-    std::vector<nonwrapping_range<T>> ret;
-    ret.reserve(v.size() + 1);
+std::deque<nonwrapping_range<T>>
+unwrap(std::deque<wrapping_range<T>>&& v, Comparator&& cmp) {
+    std::deque<nonwrapping_range<T>> ret;
     for (auto&& wr : v) {
         if (wr.is_wrap_around(cmp)) {
             auto&& p = std::move(wr).unwrap();
@@ -56,10 +56,9 @@ unwrap(std::vector<wrapping_range<T>>&& v, Comparator&& cmp) {
 // unwraps a vector of wrapping ranges into a vector of nonwrapping ranges
 // if the vector happens to be sorted by the left bound, it remains sorted
 template <typename T, typename Comparator>
-std::vector<nonwrapping_range<T>>
-unwrap(const std::vector<wrapping_range<T>>& v, Comparator&& cmp) {
-    std::vector<nonwrapping_range<T>> ret;
-    ret.reserve(v.size() + 1);
+std::deque<nonwrapping_range<T>>
+unwrap(const std::deque<wrapping_range<T>>& v, Comparator&& cmp) {
+    std::deque<nonwrapping_range<T>> ret;
     for (auto&& wr : v) {
         if (wr.is_wrap_around(cmp)) {
             auto&& p = wr.unwrap();
@@ -73,43 +72,41 @@ unwrap(const std::vector<wrapping_range<T>>& v, Comparator&& cmp) {
 }
 
 template <typename T>
-std::vector<wrapping_range<T>>
-wrap(const std::vector<nonwrapping_range<T>>& v) {
+std::deque<wrapping_range<T>>
+wrap(const std::deque<nonwrapping_range<T>>& v) {
     // re-wrap (-inf,x) ... (y, +inf) into (y, x):
     if (v.size() >= 2 && !v.front().start() && !v.back().end()) {
-        auto ret = std::vector<wrapping_range<T>>();
-        ret.reserve(v.size() - 1);
+        auto ret = std::deque<wrapping_range<T>>();
         std::copy(v.begin() + 1, v.end() - 1, std::back_inserter(ret));
         ret.emplace_back(v.back().start(), v.front().end());
         return ret;
     }
-    return boost::copy_range<std::vector<wrapping_range<T>>>(v);
+    return boost::copy_range<std::deque<wrapping_range<T>>>(v);
 }
 
 template <typename T>
-std::vector<wrapping_range<T>>
-wrap(std::vector<nonwrapping_range<T>>&& v) {
+std::deque<wrapping_range<T>>
+wrap(std::deque<nonwrapping_range<T>>&& v) {
     // re-wrap (-inf,x) ... (y, +inf) into (y, x):
     if (v.size() >= 2 && !v.front().start() && !v.back().end()) {
-        auto ret = std::vector<wrapping_range<T>>();
-        ret.reserve(v.size() - 1);
+        auto ret = std::deque<wrapping_range<T>>();
         std::move(v.begin() + 1, v.end() - 1, std::back_inserter(ret));
         ret.emplace_back(std::move(v.back()).start(), std::move(v.front()).end());
         return ret;
     }
     // want boost::adaptor::moved ...
-    return boost::copy_range<std::vector<wrapping_range<T>>>(v);
+    return boost::copy_range<std::deque<wrapping_range<T>>>(v);
 }
 
 inline
 dht::token_range_vector
-unwrap(const std::vector<wrapping_range<dht::token>>& v) {
+unwrap(const std::deque<wrapping_range<dht::token>>& v) {
     return unwrap(v, dht::token_comparator());
 }
 
 inline
 dht::token_range_vector
-unwrap(std::vector<wrapping_range<dht::token>>&& v) {
+unwrap(std::deque<wrapping_range<dht::token>>&& v) {
     return unwrap(std::move(v), dht::token_comparator());
 }
 

@@ -36,7 +36,7 @@ partition_slice_builder::partition_slice_builder(const schema& schema)
 
 query::partition_slice
 partition_slice_builder::build() {
-    std::vector<query::clustering_range> ranges;
+    std::deque<query::clustering_range> ranges;
     if (_row_ranges) {
         ranges = std::move(*_row_ranges);
     } else {
@@ -70,14 +70,14 @@ partition_slice_builder::build() {
 partition_slice_builder&
 partition_slice_builder::with_range(query::clustering_range range) {
     if (!_row_ranges) {
-        _row_ranges = std::vector<query::clustering_range>();
+        _row_ranges = std::deque<query::clustering_range>();
     }
     _row_ranges->emplace_back(std::move(range));
     return *this;
 }
 
 partition_slice_builder&
-partition_slice_builder::with_ranges(std::vector<query::clustering_range> ranges) {
+partition_slice_builder::with_ranges(std::deque<query::clustering_range> ranges) {
     if (!_row_ranges) {
         _row_ranges = std::move(ranges);
     } else {

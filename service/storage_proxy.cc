@@ -2328,7 +2328,7 @@ private:
                 if (!shortest_read->clustering) {
                     ++it;
                 } else {
-                    std::vector<query::clustering_range> ranges;
+                    std::deque<query::clustering_range> ranges;
                     ranges.emplace_back(is_reversed ? query::clustering_range::make_starting_with(std::move(*shortest_read->clustering))
                                                     : query::clustering_range::make_ending_with(std::move(*shortest_read->clustering)));
                     it->live_row_count = it->mut.partition().compact_for_query(s, cmd.timestamp, ranges, is_reversed, query::max_rows);
@@ -4250,7 +4250,7 @@ public:
         }
         if (_row_count > _cmd->row_limit) {
             auto mut = final.back().mut().unfreeze(_schema);
-            static const auto all = std::vector<query::clustering_range>({query::clustering_range::make_open_ended_both_sides()});
+            static const auto all = std::deque<query::clustering_range>({query::clustering_range::make_open_ended_both_sides()});
             auto is_reversed = _cmd->slice.options.contains(query::partition_slice::option::reversed);
             auto final_rows = _cmd->row_limit - (_row_count - final.back().row_count());
             _row_count -= final.back().row_count();

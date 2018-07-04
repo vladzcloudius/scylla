@@ -39,7 +39,7 @@
 class partition_slice_builder {
     std::experimental::optional<std::vector<column_id>> _regular_columns;
     std::experimental::optional<std::vector<column_id>> _static_columns;
-    std::experimental::optional<std::vector<query::clustering_range>> _row_ranges;
+    std::experimental::optional<std::deque<query::clustering_range>> _row_ranges;
     const schema& _schema;
     query::partition_slice::option_set _options;
 public:
@@ -50,7 +50,7 @@ public:
     partition_slice_builder& with_regular_column(bytes name);
     partition_slice_builder& with_no_regular_columns();
     partition_slice_builder& with_range(query::clustering_range range);
-    partition_slice_builder& with_ranges(std::vector<query::clustering_range>);
+    partition_slice_builder& with_ranges(std::deque<query::clustering_range>);
     partition_slice_builder& without_partition_key_columns();
     partition_slice_builder& without_clustering_key_columns();
     partition_slice_builder& reversed();

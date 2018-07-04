@@ -195,7 +195,7 @@ public:
         return { composite_value(options) };
     };
 
-    virtual std::vector<bounds_range_type> bounds_ranges(const query_options& options) const override {
+    virtual std::deque<bounds_range_type> bounds_ranges(const query_options& options) const override {
         return { bounds_range_type::make_singular(composite_value(options)) };
     }
 
@@ -268,9 +268,9 @@ public:
         return keys;
     }
 
-    virtual std::vector<bounds_range_type> bounds_ranges(const query_options& options) const override {
+    virtual std::deque<bounds_range_type> bounds_ranges(const query_options& options) const override {
         auto split_in_values = split_values(options);
-        std::vector<bounds_range_type> bounds;
+        std::deque<bounds_range_type> bounds;
         for (auto&& components : split_in_values) {
             for (unsigned i = 0; i < components.size(); i++) {
                 statements::request_validations::check_not_null(components[i], "Invalid null value in condition for column %s", _column_defs.at(i)->name_as_text());
@@ -421,7 +421,7 @@ public:
 #endif
     }
 
-    virtual std::vector<bounds_range_type> bounds_ranges(const query_options& options) const override {
+    virtual std::deque<bounds_range_type> bounds_ranges(const query_options& options) const override {
         // FIXME: doesn't work properly with mixed CLUSTERING ORDER (CASSANDRA-7281)
         auto read_bound = [&] (statements::bound b) -> std::experimental::optional<bounds_range_type::bound> {
             if (!has_bound(b)) {
