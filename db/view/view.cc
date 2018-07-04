@@ -742,8 +742,8 @@ query::clustering_row_ranges calculate_affected_clustering_ranges(const schema& 
         const dht::decorated_key& key,
         const mutation_partition& mp,
         const std::vector<view_ptr>& views) {
-    std::vector<nonwrapping_range<clustering_key_prefix_view>> row_ranges;
-    std::vector<nonwrapping_range<clustering_key_prefix_view>> view_row_ranges;
+    std::deque<nonwrapping_range<clustering_key_prefix_view>> row_ranges;
+    std::deque<nonwrapping_range<clustering_key_prefix_view>> view_row_ranges;
     clustering_key_prefix_view::tri_compare cmp(base);
     if (mp.partition_tombstone() || !mp.row_tombstones().empty()) {
         for (auto&& v : views) {

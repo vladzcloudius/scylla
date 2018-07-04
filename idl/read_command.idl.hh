@@ -27,11 +27,11 @@ namespace query {
 
 class specific_ranges {
     partition_key pk();
-    std::vector<nonwrapping_range<clustering_key_prefix>> ranges();
+    std::deque<nonwrapping_range<clustering_key_prefix>> ranges();
 };
 
 class partition_slice {
-    std::vector<nonwrapping_range<clustering_key_prefix>> default_row_ranges();
+    std::deque<nonwrapping_range<clustering_key_prefix>> default_row_ranges();
     std::vector<uint32_t> static_columns;
     std::vector<uint32_t> regular_columns;
     query::partition_slice::option_set options;

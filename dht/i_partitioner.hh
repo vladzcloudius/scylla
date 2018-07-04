@@ -77,8 +77,8 @@ class ring_position;
 using partition_range = nonwrapping_range<ring_position>;
 using token_range = nonwrapping_range<token>;
 
-using partition_range_vector = std::vector<partition_range>;
-using token_range_vector = std::vector<token_range>;
+using partition_range_vector = std::deque<partition_range>;
+using token_range_vector = std::deque<token_range>;
 
 enum class token_kind {
     before_all_keys,
@@ -727,7 +727,7 @@ class ring_position_exponential_vector_sharder {
     stdx::optional<ring_position_exponential_sharder> _current_sharder;
     unsigned _element = 0;
 public:
-    explicit ring_position_exponential_vector_sharder(const std::vector<nonwrapping_range<ring_position>>&& ranges);
+    explicit ring_position_exponential_vector_sharder(const std::deque<nonwrapping_range<ring_position>>&& ranges);
     stdx::optional<ring_position_exponential_vector_sharder_result> next(const schema& s);
 };
 
@@ -813,6 +813,20 @@ struct hash<dht::decorated_key> {
     }
 };
 
+template <typename T>
+std::ostream& operator<<(std::ostream& out, const std::deque<T>& d) {
+    if (d.empty()) {
+        return out;
+    }
+
+    out << *d.begin();
+
+    for (auto it = std::next(d.begin()); it != d.end(); ++it) {
+        out << ", " << *it;
+    }
+
+    return out;
+}
 
 }
 

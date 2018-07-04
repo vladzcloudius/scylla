@@ -94,6 +94,18 @@ struct container_traits<std::vector<T>> {
     }
 };
 
+template<typename T>
+struct container_traits<std::deque<T>> {
+    struct back_emplacer {
+        std::deque<T>& c;
+        back_emplacer(std::deque<T>& c_) : c(c_) {}
+        void operator()(T&& v) {
+            c.emplace_back(std::move(v));
+        }
+    };
+    void resize(std::vector<T>& c, size_t size) {}
+};
+
 template<typename T, size_t N>
 struct container_traits<std::array<T, N>> {
     struct back_emplacer {
@@ -170,6 +182,34 @@ struct serializer<std::vector<T>> {
     static void skip(Input& in) {
         auto sz = deserialize(in, boost::type<uint32_t>());
         skip_array<T>(in, sz);
+    }
+};
+
+template<typename T>
+struct serializer<std::deque<T>> {
+    template<typename Input>
+    static std::deque<T> read(Input& in) {
+        auto sz = deserialize(in, boost::type<uint32_t>());
+        std::deque<T> v;
+        typename container_traits<std::deque<T>>::back_emplacer be(v);
+        while (sz--) {
+            be(deserialize(in, boost::type<T>()));
+        }
+        return v;
+    }
+    template<typename Output>
+    static void write(Output& out, const std::deque<T>& v) {
+        safe_serialize_as_uint32(out, v.size());
+        for (auto&& e : v) {
+            serialize(out, e);
+        }
+    }
+    template<typename Input>
+    static void skip(Input& in) {
+        auto sz = deserialize(in, boost::type<uint32_t>());
+        while (sz--) {
+            serializer<T>::skip(in);
+        }
     }
 };
 

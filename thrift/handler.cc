@@ -357,7 +357,7 @@ public:
 
     static lw_shared_ptr<query::read_command> make_paged_read_cmd(const schema& s, uint32_t column_limit, const std::string* start_column, const dht::partition_range_vector& range) {
         auto opts = query_opts(s);
-        std::vector<query::clustering_range> clustering_ranges;
+        std::deque<query::clustering_range> clustering_ranges;
         std::vector<column_id> regular_columns;
         uint32_t row_limit;
         uint32_t partition_limit;
@@ -621,7 +621,7 @@ public:
             auto pk = key_from_thrift(s, to_bytes(request.key));
             auto dk = dht::global_partitioner().decorate_key(s, pk);
             std::vector<column_id> regular_columns;
-            std::vector<query::clustering_range> clustering_ranges;
+            std::deque<query::clustering_range> clustering_ranges;
             auto opts = query_opts(s);
             uint32_t row_limit;
             if (s.thrift().is_dynamic()) {
@@ -1453,7 +1453,7 @@ private:
     }
     static lw_shared_ptr<query::read_command> slice_pred_to_read_cmd(const schema& s, const SlicePredicate& predicate) {
         auto opts = query_opts(s);
-        std::vector<query::clustering_range> clustering_ranges;
+        std::deque<query::clustering_range> clustering_ranges;
         std::vector<column_id> regular_columns;
         uint32_t per_partition_row_limit = query::max_rows;
         if (predicate.__isset.column_names) {
@@ -1741,13 +1741,13 @@ private:
         return ret;
     }
     template<typename RangeType, typename Comparator, typename RangeComparator>
-    static std::vector<nonwrapping_range<RangeType>> make_non_overlapping_ranges(
+    static std::deque<nonwrapping_range<RangeType>> make_non_overlapping_ranges(
             std::vector<ColumnSlice> column_slices,
             const std::function<wrapping_range<RangeType>(ColumnSlice&&)> mapper,
             Comparator&& cmp,
             RangeComparator&& is_wrap_around,
             bool reversed) {
-        std::vector<nonwrapping_range<RangeType>> ranges;
+        std::deque<nonwrapping_range<RangeType>> ranges;
         std::transform(column_slices.begin(), column_slices.end(), std::back_inserter(ranges), [&](auto&& cslice) {
             auto range = mapper(std::move(cslice));
             if (!reversed && is_wrap_around(range)) {

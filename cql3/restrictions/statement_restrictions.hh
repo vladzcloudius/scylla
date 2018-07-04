@@ -352,7 +352,7 @@ private:
 #endif
 
 public:
-    std::vector<query::clustering_range> get_clustering_bounds(const query_options& options) const;
+    std::deque<query::clustering_range> get_clustering_bounds(const query_options& options) const;
 
     /**
      * Checks if the query need to use filtering.

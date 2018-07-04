@@ -134,11 +134,11 @@ public:
      * Returns the primary ranges for the local node.
      * Used for testing as well.
      */
-    static future<std::vector<token_range>> get_local_ranges() {
+    static future<std::deque<token_range>> get_local_ranges() {
         auto& ss = service::get_local_storage_service();
         return ss.get_local_tokens().then([&ss] (auto&& tokens) {
             auto ranges = ss.get_token_metadata().get_primary_ranges_for(std::move(tokens));
-            std::vector<token_range> local_ranges;
+            std::deque<token_range> local_ranges;
             auto to_bytes = [](const stdx::optional<dht::token_range::bound>& b) {
                 assert(b);
                 return utf8_type->decompose(dht::global_partitioner().to_sstring(b->value()));
@@ -189,16 +189,16 @@ private:
     };
     class virtual_row_iterator : public std::iterator<std::input_iterator_tag, const virtual_row> {
         std::reference_wrapper<const std::vector<bytes>> _cf_names;
-        std::reference_wrapper<const std::vector<token_range>> _ranges;
+        std::reference_wrapper<const std::deque<token_range>> _ranges;
         size_t _cf_names_idx = 0;
         size_t _ranges_idx = 0;
     public:
         struct end_iterator_tag {};
-        virtual_row_iterator(const std::vector<bytes>& cf_names, const std::vector<token_range>& ranges)
+        virtual_row_iterator(const std::vector<bytes>& cf_names, const std::deque<token_range>& ranges)
                 : _cf_names(std::ref(cf_names))
                 , _ranges(std::ref(ranges))
         { }
-        virtual_row_iterator(const std::vector<bytes>& cf_names, const std::vector<token_range>& ranges, end_iterator_tag)
+        virtual_row_iterator(const std::vector<bytes>& cf_names, const std::deque<token_range>& ranges, end_iterator_tag)
                 : _cf_names(std::ref(cf_names))
                 , _ranges(std::ref(ranges))
                 , _cf_names_idx(cf_names.size())
@@ -228,7 +228,7 @@ private:
     };
 
     std::vector<db::system_keyspace::range_estimates>
-    estimates_for_current_keyspace(const database& db, std::vector<token_range> local_ranges) const {
+    estimates_for_current_keyspace(const database& db, std::deque<token_range> local_ranges) const {
         auto pkey = partition_key::from_single_value(*_schema, utf8_type->decompose(*_current_partition));
         auto cfs = db.find_keyspace(*_current_partition).metadata()->cf_meta_data();
         auto cf_names = boost::copy_range<std::vector<bytes>>(cfs | boost::adaptors::transformed([] (auto&& cf) {

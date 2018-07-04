@@ -180,14 +180,13 @@ public:
     }
 
 private:
-    std::vector<range_type> compute_bounds(const query_options& options) const {
-        std::vector<range_type> ranges;
+    std::deque<range_type> compute_bounds(const query_options& options) const {
+        std::deque<range_type> ranges;
 
         static constexpr auto invalid_null_msg = std::is_same<ValueType, partition_key>::value
             ? "Invalid null value for partition key part %s" : "Invalid null value for clustering key part %s";
 
         if (_restrictions->is_all_eq()) {
-            ranges.reserve(1);
             if (_restrictions->size() == 1) {
                 auto&& e = *_restrictions->restrictions().begin();
                 const column_definition* def = e.first;
@@ -247,7 +246,6 @@ private:
                     return std::move(ranges);
                 }
 
-                ranges.reserve(cartesian_product_size(vec_of_values));
                 for (auto&& prefix : make_cartesian_product(vec_of_values)) {
                     auto read_bound = [r, &prefix, &options, this](statements::bound bound) -> range_bound {
                         if (r->has_bound(bound)) {
@@ -288,7 +286,6 @@ private:
             vec_of_values.emplace_back(std::move(values));
         }
 
-        ranges.reserve(cartesian_product_size(vec_of_values));
         for (auto&& prefix : make_cartesian_product(vec_of_values)) {
             ranges.emplace_back(range_type::make_singular(ValueType::from_optional_exploded(*_schema, std::move(prefix))));
         }
@@ -297,7 +294,7 @@ private:
     }
 
 public:
-    std::vector<bounds_range_type> bounds_ranges(const query_options& options) const override;
+    std::deque<bounds_range_type> bounds_ranges(const query_options& options) const override;
 
     std::vector<bytes_opt> values(const query_options& options) const override {
         auto src = values_as_keys(options);
@@ -361,7 +358,6 @@ template<>
 dht::partition_range_vector
 single_column_primary_key_restrictions<partition_key>::bounds_ranges(const query_options& options) const {
     dht::partition_range_vector ranges;
-    ranges.reserve(size());
     for (query::range<partition_key>& r : compute_bounds(options)) {
         if (!r.is_singular()) {
             throw exceptions::invalid_request_exception("Range queries on partition key values not supported.");
@@ -376,7 +372,7 @@ single_column_primary_key_restrictions<partition_key>::bounds_ranges(const query
 }
 
 template<>
-std::vector<query::clustering_range>
+std::deque<query::clustering_range>
 single_column_primary_key_restrictions<clustering_key_prefix>::bounds_ranges(const query_options& options) const {
     auto wrapping_bounds = compute_bounds(options);
     auto bounds = boost::copy_range<query::clustering_row_ranges>(wrapping_bounds

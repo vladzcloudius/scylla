@@ -3276,7 +3276,6 @@ future<mutation> database::do_apply_counter_update(column_family& cf, const froz
     });
 
     query::clustering_row_ranges cr_ranges;
-    cr_ranges.reserve(8);
     std::vector<column_id> regular_columns;
     regular_columns.reserve(32);
 
