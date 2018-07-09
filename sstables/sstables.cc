@@ -2075,6 +2075,8 @@ create_sharding_metadata(schema_ptr schema, const dht::decorated_key& first_key,
             sm.token_ranges.elements.push_back(disk_token_range{
                 {left_exclusive, to_bytes(bytes_view(left_token._data))},
                 {right_exclusive, to_bytes(bytes_view(right_token._data))}});
+
+            seastar::thread::yield_maybe();
         }
     }
     return sm;

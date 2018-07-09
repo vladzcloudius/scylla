@@ -31,6 +31,7 @@
 #include <boost/range/irange.hpp>
 #include <boost/range/adaptor/transformed.hpp>
 #include "sstables/key.hh"
+#include <seastar/core/thread.hh>
 
 namespace dht {
 
@@ -435,6 +436,7 @@ split_range_to_single_shard(const i_partitioner& partitioner, const schema& s, c
         }
         start_token = partitioner.token_for_next_shard(end_token, shard);
         start_boundary = range_bound<ring_position>(ring_position::starting_at(start_token));
+        seastar::thread::yield_maybe();
     }
     return ret;
 }
