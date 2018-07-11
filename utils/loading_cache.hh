@@ -294,6 +294,7 @@ public:
         }
 
         _timer_period = std::min(_expiry, _refresh);
+        _stopped = false;
         _timer.arm(_timer_period);
     }
 
@@ -308,11 +309,13 @@ public:
         }
 
         _timer_period = _expiry;
+        _stopped = false;
         _timer.arm(_timer_period);
     }
 
     ~loading_cache() {
         _lru_list.erase_and_dispose(_lru_list.begin(), _lru_list.end(), [] (ts_value_lru_entry* ptr) { loading_cache::destroy_ts_value(ptr); });
+        assert(_stopped);
     }
 
     template <typename LoadFunc>
@@ -371,7 +374,7 @@ public:
     }
 
     future<> stop() {
-        return _timer_reads_gate.close().finally([this] { _timer.cancel(); });
+        return _timer_reads_gate.close().finally([this] { _timer.cancel(); _stopped = true; });
     }
 
     template<typename KeyType, typename KeyHasher, typename KeyEqual>
@@ -575,6 +578,7 @@ private:
     timer<loading_cache_clock_type> _timer;
     seastar::gate _timer_reads_gate;
     value_extractor_fn _value_extractor_fn;
+    bool _stopped = true;
 };
 
 }
