@@ -557,73 +557,73 @@ inline elapsed_clock::duration trace_state::elapsed() {
 }
 
 inline void set_page_size(const trace_state_ptr& p, int32_t val) {
-    if (p) {
+    if (__builtin_expect(bool(p), false)) {
         p->set_page_size(val);
     }
 }
 
 inline void set_request_size(const trace_state_ptr& p, size_t s) noexcept {
-    if (p) {
+    if (__builtin_expect(bool(p), false)) {
         p->set_request_size(s);
     }
 }
 
 inline void set_response_size(const trace_state_ptr& p, size_t s) noexcept {
-    if (p) {
+    if (__builtin_expect(bool(p), false)) {
         p->set_response_size(s);
     }
 }
 
 inline void set_batchlog_endpoints(const trace_state_ptr& p, const std::unordered_set<gms::inet_address>& val) {
-    if (p) {
+    if (__builtin_expect(bool(p), false)) {
         p->set_batchlog_endpoints(val);
     }
 }
 
 inline void set_consistency_level(const trace_state_ptr& p, db::consistency_level val) {
-    if (p) {
+    if (__builtin_expect(bool(p), false)) {
         p->set_consistency_level(val);
     }
 }
 
 inline void set_optional_serial_consistency_level(const trace_state_ptr& p, const std::experimental::optional<db::consistency_level>& val) {
-    if (p) {
+    if (__builtin_expect(bool(p), false)) {
         p->set_optional_serial_consistency_level(val);
     }
 }
 
 inline void add_query(const trace_state_ptr& p, const sstring& val) {
-    if (p) {
+    if (__builtin_expect(bool(p), false)) {
         p->add_query(val);
     }
 }
 
 inline void set_user_timestamp(const trace_state_ptr& p, api::timestamp_type val) {
-    if (p) {
+    if (__builtin_expect(bool(p), false)) {
         p->set_user_timestamp(val);
     }
 }
 
 inline void add_prepared_statement(const trace_state_ptr& p, prepared_checked_weak_ptr& prepared) {
-    if (p) {
+    if (__builtin_expect(bool(p), false)) {
         p->add_prepared_statement(prepared);
     }
 }
 
 inline void set_username(const trace_state_ptr& p, const stdx::optional<auth::authenticated_user>& user) {
-    if (p) {
+    if (__builtin_expect(bool(p), false)) {
         p->set_username(user);
     }
 }
 
 inline void add_table_name(const trace_state_ptr& p, const sstring& ks_name, const sstring& cf_name) {
-    if (p) {
+    if (__builtin_expect(bool(p), false)) {
         p->add_table_name(ks_name + "." + cf_name);
     }
 }
 
 inline bool should_return_id_in_response(const trace_state_ptr& p) {
-    if (p) {
+    if (__builtin_expect(bool(p), false)) {
         return p->write_on_close();
     }
     return false;
@@ -641,7 +641,7 @@ inline bool should_return_id_in_response(const trace_state_ptr& p) {
  */
 template <typename... A>
 inline void begin(const trace_state_ptr& p, A&&... a) {
-    if (p) {
+    if (__builtin_expect(bool(p), false)) {
         p->begin(std::forward<A>(a)...);
     }
 }
