@@ -61,6 +61,7 @@ struct trace_state::params_values {
     std::experimental::optional<db::consistency_level> serial_cl;
     std::experimental::optional<int32_t> page_size;
     std::vector<prepared_checked_weak_ptr> prepared_statements;
+    size_t request_size = 0;
 };
 
 trace_state::params_values* trace_state::params_ptr::get_ptr_safe() {
@@ -92,6 +93,10 @@ void trace_state::set_page_size(int32_t val) {
     if (val > 0) {
         _params_ptr->page_size.emplace(val);
     }
+}
+
+void trace_state::set_request_size(size_t s) noexcept {
+    _params_ptr->request_size = s;
 }
 
 void trace_state::add_query(const sstring& val) {
@@ -165,6 +170,8 @@ void trace_state::build_parameters_map(const cql3::query_options* prepared_optio
             }
         }
     }
+
+    params_map.emplace("request_size", seastar::format("{:d}", vals.request_size));
 }
 
 void trace_state::build_parameters_map_for_one_prepared(const prepared_checked_weak_ptr& prepared_ptr, const cql3::query_options& options, const sstring& param_name_prefix) {
