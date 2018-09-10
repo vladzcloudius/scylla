@@ -187,6 +187,11 @@ public:
         return _reader.buffer_size();
     }
 
+    /// Return the number of bytes this querier had to process.
+    size_t bytes_read() const noexcept {
+        return _reader.bytes_read();
+    }
+
     schema_ptr schema() const {
         return _schema;
     }
@@ -496,6 +501,7 @@ public:
             const dht::partition_range_vector& ranges,
             const query::partition_slice& slice,
             tracing::trace_state_ptr trace_state);
+    const utils::UUID& key() const noexcept { return _key; }
 };
 
 } // namespace query
