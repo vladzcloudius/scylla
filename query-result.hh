@@ -402,6 +402,10 @@ public:
 
     void ensure_counts();
 
+    size_t memory_usage() const noexcept {
+        return _memory_tracker.used_memory();
+    }
+
     struct printer {
         schema_ptr s;
         const query::partition_slice& slice;
