@@ -90,6 +90,7 @@ public:
     private:
         circular_buffer<mutation_fragment> _buffer;
         size_t _buffer_size = 0;
+        size_t _pushed_bytes = 0;
         bool _consume_done = false;
     protected:
         size_t max_buffer_size_in_bytes = 8 * 1024;
@@ -101,7 +102,9 @@ public:
         void push_mutation_fragment(Args&&... args) {
             seastar::memory::on_alloc_point(); // for exception safety tests
             _buffer.emplace_back(std::forward<Args>(args)...);
-            _buffer_size += _buffer.back().memory_usage(*_schema);
+            size_t mfrag_size = _buffer.back().memory_usage(*_schema);
+            _buffer_size += mfrag_size;
+            _pushed_bytes += mfrag_size;
         }
         void clear_buffer() {
             _buffer.erase(_buffer.begin(), _buffer.end());
@@ -302,6 +305,10 @@ public:
             return _buffer_size;
         }
 
+        size_t pushed_bytes() const noexcept {
+            return _pushed_bytes;
+        }
+
         circular_buffer<mutation_fragment> detach_buffer() {
             _buffer_size = 0;
             return std::exchange(_buffer, {});
@@ -433,6 +440,12 @@ public:
     size_t buffer_size() const {
         return _impl->buffer_size();
     }
+
+    // Returns the number of bytes that were read so far.
+    size_t bytes_read() const noexcept {
+        return _impl->pushed_bytes();
+    }
+
     // Detach the internal buffer of the reader.
     // Roughly equivalent to depleting it by calling pop_mutation_fragment()
     // until is_buffer_empty() returns true.
