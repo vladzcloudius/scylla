@@ -2022,8 +2022,16 @@ future<> data_query(
 
     return do_with(std::move(q), [=, &builder, trace_ptr = std::move(trace_ptr), cache_ctx = std::move(cache_ctx)] (query::data_querier& q) mutable {
         auto qrb = query_result_builder(*s, builder);
+        size_t memory_usage_before = q.bytes_read();
+        size_t tombestones_bytes_before = q.tombstones_bytes();
+        size_t dead_bytes_before = q.dead_bytes();
+
         return q.consume_page(std::move(qrb), row_limit, partition_limit, query_time, timeout).then(
                 [=, &builder, &q, trace_ptr = std::move(trace_ptr), cache_ctx = std::move(cache_ctx)] () mutable {
+
+            tracing::trace(trace_ptr, "querier_cache[{}]: bytes read in this page: total {}, tombstones {}, dead {}",
+                cache_ctx.key(), q.bytes_read() - memory_usage_before, q.tombstones_bytes() - tombestones_bytes_before, q.dead_bytes() - dead_bytes_before);
+
             if (q.are_limits_reached() || builder.is_short_read()) {
                 cache_ctx.insert(std::move(q), std::move(trace_ptr));
             }
@@ -2115,8 +2123,16 @@ static do_mutation_query(schema_ptr s,
     return do_with(std::move(q), [=, &slice, accounter = std::move(accounter), trace_ptr = std::move(trace_ptr), cache_ctx = std::move(cache_ctx)] (
                 query::mutation_querier& q) mutable {
         auto rrb = reconcilable_result_builder(*s, slice, std::move(accounter));
+        size_t memory_usage_before = q.bytes_read();
+        size_t tombestones_bytes_before = q.tombstones_bytes();
+        size_t dead_bytes_before = q.dead_bytes();
+
         return q.consume_page(std::move(rrb), row_limit, partition_limit, query_time, timeout).then(
                 [=, &q, trace_ptr = std::move(trace_ptr), cache_ctx = std::move(cache_ctx)] (reconcilable_result r) mutable {
+
+            tracing::trace(trace_ptr, "querier_cache[{}]: bytes read in this page: total {}, tombstones {}, dead {}",
+                cache_ctx.key(), q.bytes_read() - memory_usage_before, q.tombstones_bytes() - tombestones_bytes_before, q.dead_bytes() - dead_bytes_before);
+
             if (q.are_limits_reached() || r.is_short_read()) {
                 cache_ctx.insert(std::move(q), std::move(trace_ptr));
             }
@@ -2356,12 +2372,15 @@ future<mutation_opt> counter_write_query(schema_ptr s, const mutation_source& so
     };
 
     // do_with() doesn't support immovable objects
-    auto r_a_r = std::make_unique<range_and_reader>(s, source, dk, slice, std::move(trace_ptr));
+    auto r_a_r = std::make_unique<range_and_reader>(s, source, dk, slice, trace_ptr);
     auto cwqrb = counter_write_query_result_builder(*s);
     auto cfq = make_stable_flattened_mutations_consumer<compact_for_query<emit_only_live_rows::yes, counter_write_query_result_builder>>(
             *s, gc_clock::now(), slice, query::max_rows, query::max_rows, std::move(cwqrb));
+    auto cstats_ptr = cfq.get_stats_ptr();
     auto f = r_a_r->reader.consume(std::move(cfq), flat_mutation_reader::consume_reversed_partitions::no);
-    return f.finally([r_a_r = std::move(r_a_r)] { });
+    return f.finally([r_a_r = std::move(r_a_r), trace_ptr = std::move(trace_ptr), cstats_ptr = std::move(cstats_ptr)] {
+        tracing::trace(trace_ptr, "counter_write_query: read bytes: total {}, tombstones {}, dead {}", r_a_r->reader.bytes_read(), cstats_ptr->tombstones_bytes, cstats_ptr->dead_bytes);
+    });
 }
 
 mutation_cleaner_impl::~mutation_cleaner_impl() {

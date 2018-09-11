@@ -648,8 +648,9 @@ static future<reconcilable_result> do_query_mutations(
 
             auto compaction_state = make_lw_shared<compact_for_mutation_query_state>(*s, cmd.timestamp, cmd.slice, cmd.row_limit,
                     cmd.partition_limit);
+            auto cstats_ptr = compaction_state->get_stats_ptr();
 
-            return do_with(std::move(reader), std::move(compaction_state), [&, accounter = std::move(accounter), timeout] (
+            return do_with(std::move(reader), std::move(compaction_state), [&, accounter = std::move(accounter), timeout, trace_state = std::move(trace_state), cstats_ptr = std::move(cstats_ptr)] (
                         flat_mutation_reader& reader, lw_shared_ptr<compact_for_mutation_query_state>& compaction_state) mutable {
                 auto rrb = reconcilable_result_builder(*reader.schema(), cmd.slice, std::move(accounter));
                 return query::consume_page(reader,
@@ -665,6 +666,8 @@ static future<reconcilable_result> do_query_mutations(
                             circular_buffer<mutation_fragment>,
                             lw_shared_ptr<compact_for_mutation_query_state>>(std::move(last_ckey), std::move(result), reader.detach_buffer(),
                                     std::move(compaction_state));
+                }).finally([&reader, trace_state = std::move(trace_state), cstats_ptr = std::move(cstats_ptr)] {
+                    tracing::trace(trace_state, "do_query_mutations: bytes read in this page: total {}, tombstones {}, dead {}", reader.bytes_read(), cstats_ptr->tombstones_bytes, cstats_ptr->dead_bytes);
                 });
             }).then_wrapped([&ctx] (future<std::optional<clustering_key_prefix>, reconcilable_result, circular_buffer<mutation_fragment>,
                     lw_shared_ptr<compact_for_mutation_query_state>>&& result_fut) {
