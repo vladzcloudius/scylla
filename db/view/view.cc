@@ -1526,6 +1526,8 @@ public:
 
 // Called in the context of a seastar::thread.
 void view_builder::execute(build_step& step, exponential_backoff_retry r) {
+    auto total_bytes_before = step.reader.bytes_read();
+
     auto consumer = compact_for_query<emit_only_live_rows::yes, view_builder::consumer>(
             *step.reader.schema(),
             gc_clock::now(),
@@ -1534,8 +1536,11 @@ void view_builder::execute(build_step& step, exponential_backoff_retry r) {
             query::max_partitions,
             view_builder::consumer{*this, step});
     consumer.consume_new_partition(step.current_key); // Initialize the state in case we're resuming a partition
+    auto compact_stats_ptr = consumer.get_stats_ptr();
     auto built = step.reader.consume_in_thread(std::move(consumer));
 
+    vlogger.trace("view_builder::execute: read bytes from {}:{}: total {}, tombstones {}, dead {}",
+        step.reader.schema()->ks_name(), step.reader.schema()->cf_name(), step.reader.bytes_read() - total_bytes_before, compact_stats_ptr->tombstones_bytes, compact_stats_ptr->dead_bytes);
     _as.check();
 
     std::vector<future<>> bookkeeping_ops;
