@@ -364,6 +364,7 @@ public:
     auto consume(range_tombstone&& rt) { return _ptr->consume(std::move(rt)); }
     auto consume_end_of_partition() { return _ptr->consume_end_of_partition(); }
     auto consume_end_of_stream() { return _ptr->consume_end_of_stream(); }
+    auto get_stats_ptr() noexcept { return _ptr->get_stats_ptr(); }
 };
 
 template<typename FlattenedConsumer, typename... Args>
