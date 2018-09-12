@@ -93,6 +93,10 @@ struct tombstone final : public with_relational_operators<tombstone> {
             return out << "{tombstone: none}";
         }
     }
+
+    size_t memory_usage() const noexcept {
+        return sizeof(tombstone);
+    }
 };
 
 template<>
