@@ -192,6 +192,14 @@ public:
         return _reader.bytes_read();
     }
 
+    size_t tombstones_bytes() const noexcept {
+        return _compaction_state->tombstones_bytes();
+    }
+
+    size_t dead_bytes() const noexcept {
+        return _compaction_state->dead_bytes();
+    }
+
     schema_ptr schema() const {
         return _schema;
     }
