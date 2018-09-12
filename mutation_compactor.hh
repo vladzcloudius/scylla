@@ -87,6 +87,12 @@ class compact_mutation_state {
     bool _has_ck_selector{};
 
     std::optional<static_row> _last_static_row;
+
+    struct stats {
+        size_t tombstones_bytes = 0;
+        size_t dead_bytes = 0;
+    };
+    lw_shared_ptr<stats> _stats_ptr;
 private:
     static constexpr bool only_live() {
         return OnlyLive == emit_only_live_rows::yes;
@@ -129,6 +135,7 @@ private:
     };
 
 public:
+    using stats_shared_ptr = lw_shared_ptr<stats>;
     struct parameters {
         static constexpr emit_only_live_rows only_live = OnlyLive;
         static constexpr compact_for_sstables sstable_compaction = SSTableCompaction;
@@ -148,6 +155,7 @@ public:
         , _partition_row_limit(_slice.options.contains(query::partition_slice::option::distinct) ? 1 : slice.partition_row_limit())
         , _range_tombstones(s, _slice.options.contains(query::partition_slice::option::reversed))
         , _last_dk({dht::token(), partition_key::make_empty()})
+        , _stats_ptr(make_lw_shared<stats>())
     {
         static_assert(!sstable_compaction(), "This constructor cannot be used for sstable compaction.");
     }
@@ -162,6 +170,7 @@ public:
         , _slice(s.full_slice())
         , _range_tombstones(s, false)
         , _last_dk({dht::token(), partition_key::make_empty()})
+        , _stats_ptr(make_lw_shared<stats>())
     {
         static_assert(sstable_compaction(), "This constructor can only be used for sstable compaction.");
         static_assert(!only_live(), "SSTable compaction cannot be run with emit_only_live_rows::yes.");
@@ -185,6 +194,8 @@ public:
         requires CompactedFragmentsConsumer<Consumer>
     )
     void consume(tombstone t, Consumer& consumer) {
+        _stats_ptr->tombstones_bytes += t.memory_usage();
+
         _range_tombstones.set_partition_tombstone(t);
         if (!only_live() && !can_purge_tombstone(t)) {
             partition_is_not_empty(consumer);
@@ -196,11 +207,17 @@ public:
         requires CompactedFragmentsConsumer<Consumer>
     )
     stop_iteration consume(static_row&& sr, Consumer& consumer) {
+        auto mem_usage = sr.memory_usage(_schema);
+
         _last_static_row = static_row(_schema, sr);
         auto current_tombstone = _range_tombstones.get_partition_tombstone();
         bool is_live = sr.cells().compact_and_expire(_schema, column_kind::static_column,
                                                      row_tombstone(current_tombstone),
                                                      _query_time, _can_gc, _gc_before);
+        if (!is_live) {
+            _stats_ptr->dead_bytes += mem_usage;
+        }
+
         _static_row_live = is_live;
         if (is_live || (!only_live() && !sr.empty())) {
             partition_is_not_empty(consumer);
@@ -214,6 +231,7 @@ public:
         requires CompactedFragmentsConsumer<Consumer>
     )
     stop_iteration consume(clustering_row&& cr, Consumer& consumer) {
+        auto mem_usage = cr.memory_usage(_schema);
         auto current_tombstone = _range_tombstones.tombstone_for_row(cr.key());
         auto t = cr.tomb();
         if (t.tomb() <= current_tombstone || can_purge_tombstone(t)) {
@@ -222,6 +240,11 @@ public:
         t.apply(current_tombstone);
         bool is_live = cr.marker().compact_and_expire(t.tomb(), _query_time, _can_gc, _gc_before);
         is_live |= cr.cells().compact_and_expire(_schema, column_kind::regular_column, t, _query_time, _can_gc, _gc_before, cr.marker());
+
+        if (!is_live) {
+            _stats_ptr->dead_bytes += mem_usage;
+        }
+
         if (only_live() && is_live) {
             partition_is_not_empty(consumer);
             auto stop = consumer.consume(std::move(cr), t, true);
@@ -248,6 +271,8 @@ public:
         requires CompactedFragmentsConsumer<Consumer>
     )
     stop_iteration consume(range_tombstone&& rt, Consumer& consumer) {
+        _stats_ptr->tombstones_bytes += rt.memory_usage(_schema);
+
         _range_tombstones.apply(rt);
         // FIXME: drop tombstone if it is fully covered by other range tombstones
         if (!can_purge_tombstone(rt.tomb) && rt.tomb > _range_tombstones.get_partition_tombstone()) {
@@ -341,6 +366,18 @@ public:
         partition_start ps(std::move(_last_dk), _range_tombstones.get_partition_tombstone());
         return {std::move(ps), std::move(_last_static_row), std::move(_range_tombstones).range_tombstones()};
     }
+
+    stats_shared_ptr get_stats_ptr() {
+        return _stats_ptr;
+    }
+
+    size_t tombstones_bytes() const noexcept {
+        return _stats_ptr->tombstones_bytes;
+    }
+
+    size_t dead_bytes() const noexcept {
+        return _stats_ptr->dead_bytes;
+    }
 };
 
 template<emit_only_live_rows OnlyLive, compact_for_sstables SSTableCompaction, typename Consumer>
@@ -395,6 +432,10 @@ public:
 
     auto consume_end_of_stream() {
         return _state->consume_end_of_stream(_consumer);
+    }
+
+    typename compact_mutation_state<OnlyLive, SSTableCompaction>::stats_shared_ptr get_stats_ptr() {
+        return _state->get_stats_ptr();
     }
 };
 
