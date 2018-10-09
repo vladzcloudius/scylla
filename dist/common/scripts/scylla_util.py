@@ -28,6 +28,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import yaml
 
 
 def curl(url, byte=False):
@@ -379,11 +380,34 @@ def colorprint(msg, **kwargs):
 
 def get_mode_cpuset(nic, mode):
     try:
-        mode_cpu_mask = out('/usr/lib/scylla/perftune.py --tune net --nic "{nic}" --mode "{mode}" --get-cpu-mask'.format(nic=nic, mode=mode))
+        mode_cpu_mask = out('{base_cmd} --tune net --nic "{nic}" --mode "{mode}" --get-cpu-mask'.format(base_cmd=perftune_base_command(), nic=nic, mode=mode))
         return hex2list(mode_cpu_mask)
     except subprocess.CalledProcessError:
         return '-1'
 
+def get_scylla_dirs():
+    """
+    Returns a list of scylla directories configured in /etc/scylla/scylla.yaml.
+    Verifies that mandatory parameters are set.
+    """
+    scylla_yaml_name = '/etc/scylla/scylla.yaml'
+    y = yaml.load(open(scylla_yaml_name))
+    dirs = []
+    dirs = dirs + y['data_file_directories']
+
+    # Check that mandatory fields are set
+    if not " ".join(dirs).strip():
+        raise Exception("{}: at least one directory has to be set for 'data_file_directory'".format(scylla_yaml_name))
+    if not y['commitlog_directory']:
+        raise Exception("{}: 'commitlog_directory' has to be set".format(scylla_yaml_name))
+
+    dirs.append(y['commitlog_directory'])
+    dirs.append(y['hints_directory'])
+    return [d for d in dirs if d is not None]
+
+def perftune_base_command():
+    disk_tune_param = "--tune disks " + " ".join("--dir {}".format(d) for d in get_scylla_dirs())
+    return '/usr/lib/scylla/perftune.py {}'.format(disk_tune_param)
 
 def get_cur_cpuset():
     cfg = sysconfig_parser('/etc/scylla.d/cpuset.conf')
@@ -411,7 +435,7 @@ def create_perftune_conf(nic='eth0'):
     if os.path.exists('/etc/scylla.d/perftune.yaml'):
         return
     mode = get_tune_mode(nic)
-    yaml = out('/usr/lib/scylla/perftune.py --tune net --nic "{nic}" --mode {mode} --dump-options-file'.format(nic=nic, mode=mode))
+    yaml = out('{base_cmd} --tune net --nic "{nic}" --mode {mode} --dump-options-file'.format(base_cmd=perftune_base_command(), nic=nic, mode=mode))
     with open('/etc/scylla.d/perftune.yaml', 'w') as f:
         f.write(yaml)
 
