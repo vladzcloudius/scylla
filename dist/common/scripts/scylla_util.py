@@ -392,17 +392,20 @@ def get_scylla_dirs():
     """
     scylla_yaml_name = '/etc/scylla/scylla.yaml'
     y = yaml.load(open(scylla_yaml_name))
-    dirs = []
-    dirs = dirs + y['data_file_directories']
 
     # Check that mandatory fields are set
-    if not " ".join(dirs).strip():
-        raise Exception("{}: at least one directory has to be set for 'data_file_directory'".format(scylla_yaml_name))
-    if not y['commitlog_directory']:
+    if 'data_file_directories' not in y or not len(y['data_file_directories']) or not " ".join(y['data_file_directories']).strip():
+        raise Exception("{}: at least one directory has to be set in 'data_file_directory'".format(scylla_yaml_name))
+    if 'commitlog_directory' not in y or not y['commitlog_directory']:
         raise Exception("{}: 'commitlog_directory' has to be set".format(scylla_yaml_name))
 
+    dirs = []
+    dirs = dirs + y['data_file_directories']
     dirs.append(y['commitlog_directory'])
-    dirs.append(y['hints_directory'])
+
+    if 'hints_directory' in y:
+        dirs.append(y['hints_directory'])
+
     return [d for d in dirs if d is not None]
 
 def perftune_base_command():
