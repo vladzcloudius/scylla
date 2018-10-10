@@ -441,7 +441,7 @@ def create_perftune_conf(nic='eth0'):
     if os.path.exists('/etc/scylla.d/perftune.yaml'):
         return
     mode = get_tune_mode(nic)
-    yaml = out('{base_cmd} --tune net --nic "{nic}" --mode {mode} --dump-options-file'.format(base_cmd=perftune_base_command(), nic=nic, mode=mode))
+    yaml = out('/usr/lib/scylla/perftune.py --tune net --nic "{nic}" --mode {mode} --dump-options-file'.format(nic=nic, mode=mode))
     with open('/etc/scylla.d/perftune.yaml', 'w') as f:
         f.write(yaml)
 
