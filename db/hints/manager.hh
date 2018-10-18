@@ -179,6 +179,10 @@ public:
                 return _state.contains(state::stopping);
             }
 
+            bool replay_allowed() const noexcept {
+                return _ep_manager.replay_allowed();
+            }
+
             /// \brief Try to send one hint read from the file.
             ///  - Limit the maximum memory size of hints "in the air" and the maximum total number of hints "in the air".
             ///  - Discard the hints that are older than the grace seconds value of the corresponding table.
@@ -328,6 +332,10 @@ public:
             return _hints_in_progress;
         }
 
+        bool replay_allowed() const noexcept {
+            return _shard_manager.replay_allowed();
+        }
+
         bool can_hint() const noexcept {
             return _state.contains(state::can_hint);
         }
@@ -395,11 +403,13 @@ public:
 
     enum class state {
         started,                // hinting is currently allowed (start() call is complete)
+        replay_allowed,         // replaying (hints sending) is allowed
         stopping                // hinting is not allowed - stopping is in progress (stop() method has been called)
     };
 
     using state_set = enum_set<super_enum<state,
         state::started,
+        state::replay_allowed,
         state::stopping>>;
 
 private:
@@ -512,6 +522,10 @@ public:
     void allow_hints();
     void forbid_hints();
     void forbid_hints_for_eps_with_pending_hints();
+
+    void allow_replaying() noexcept {
+        _state.set(state::replay_allowed);
+    }
 
     /// \brief Rebalance hints segments among all present shards.
     ///
@@ -640,6 +654,10 @@ private:
 
     void set_started() noexcept {
         _state.set(state::started);
+    }
+
+    bool replay_allowed() const noexcept {
+        return _state.contains(state::replay_allowed);
     }
 
 public:
