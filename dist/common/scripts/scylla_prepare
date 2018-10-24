@@ -62,7 +62,7 @@ if __name__ == '__main__':
             run('hugeadm --create-mounts')
         fi
     else:
-        set_nic = cfg.get('SET_NIC')
+        set_nic = cfg.get('SET_NIC_AND_DISKS')
         ifname = cfg.get('IFNAME')
         if set_nic  == 'yes':
             create_perftune_conf(ifname)
