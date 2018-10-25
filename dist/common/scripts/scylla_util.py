@@ -513,11 +513,17 @@ class sysconfig_parser:
     def get(self, key):
         return self._cfg.get('global', key).strip('"')
 
-    def set(self, key, val):
-        if not self._cfg.has_option('global', key):
-            return self.__add(key, val)
-        self._data = re.sub('^{}=[^\n]*$'.format(key), '{}="{}"'.format(key, self.__escape(val)), self._data, flags=re.MULTILINE)
+    def has_option(self, key):
+        return self._cfg.has_option('global', key)
+
+    def rename_and_set(self, old_key, new_key, val):
+        if not self.has_option(old_key):
+            return self.__add(new_key, val)
+        self._data = re.sub('^{}=[^\n]*$'.format(old_key), '{}="{}"'.format(new_key, self.__escape(val)), self._data, flags=re.MULTILINE)
         self.__load()
+
+    def set(self, key, val):
+        self.rename_and_set(key, key, val)
 
     def commit(self):
         with open(self._filename, 'w') as f:
