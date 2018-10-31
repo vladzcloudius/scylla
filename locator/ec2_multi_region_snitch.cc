@@ -58,8 +58,7 @@ future<> ec2_multi_region_snitch::start() {
                 pub_addr = aws_api_call(AWS_QUERY_SERVER_ADDR, PUBLIC_IP_QUERY_REQ).get0();
                 local_public_address = inet_address(pub_addr);
             } catch (...) {
-                logger().error("Failed to get a Public IP. Public IP is a requirement for Ec2MultiRegionSnitch. Consider using a different snitch if your instance doesn't have it");
-                throw;
+                throw exceptions::configuration_exception("Failed to get a Public IP. Public IP is a requirement for Ec2MultiRegionSnitch. Consider using a different snitch if your instance doesn't have it");
             }
             logger().info("Ec2MultiRegionSnitch using publicIP as identifier: {}", local_public_address);
 
