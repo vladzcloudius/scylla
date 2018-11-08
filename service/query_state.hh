@@ -32,6 +32,7 @@ class query_state final {
 private:
     client_state _client_state;
     tracing::trace_state_ptr _trace_state_ptr;
+    lw_shared_ptr<sstring> _query_ptr;
 
 public:
     query_state(client_state client_state)
@@ -56,6 +57,14 @@ public:
     }
     api::timestamp_type get_timestamp() {
         return _client_state.get_timestamp();
+    }
+
+    lw_shared_ptr<sstring>& get_query_ptr() noexcept {
+        return _query_ptr;
+    }
+
+    void set_query(sstring query) {
+        _query_ptr = make_lw_shared<sstring>(std::move(query));
     }
 };
 

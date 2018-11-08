@@ -766,11 +766,14 @@ future<response_type> cql_server::connection::process_query(uint16_t stream, byt
         _server._unpaged_queries += 1;
     }
 
+    query_state.set_query(query.to_string());
+
     tracing::set_page_size(query_state.get_trace_state(), options.get_page_size());
     tracing::set_consistency_level(query_state.get_trace_state(), options.get_consistency());
     tracing::set_optional_serial_consistency_level(query_state.get_trace_state(), options.get_serial_consistency());
-    tracing::add_query(query_state.get_trace_state(), query.to_string());
+    tracing::add_query(query_state.get_trace_state(), *query_state.get_query_ptr());
     tracing::set_user_timestamp(query_state.get_trace_state(), options.get_specific_options().timestamp);
+
 
     tracing::begin(query_state.get_trace_state(), "Execute CQL3 query", query_state.get_client_state().get_client_address());
 
@@ -847,6 +850,8 @@ future<response_type> cql_server::connection::process_execute(uint16_t stream, b
     }
     auto& options = *q_state->options;
     auto skip_metadata = options.skip_metadata();
+
+    query_state.set_query(prepared->raw_cql_statement);
 
     tracing::set_page_size(client_state.get_trace_state(), options.get_page_size());
     tracing::set_consistency_level(client_state.get_trace_state(), options.get_consistency());
