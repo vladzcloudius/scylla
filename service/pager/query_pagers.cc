@@ -221,7 +221,7 @@ static bool has_clustering_keys(const schema& s, const query::read_command& cmd)
                 std::move(command),
                 std::move(ranges),
                 _options.get_consistency(),
-                {this_timeout, _state.get_trace_state(), std::move(_last_replicas), _query_read_repair_decision});
+                {this_timeout, _state.get_query_ptr(), _state.get_trace_state(), std::move(_last_replicas), _query_read_repair_decision});
     }
 
     future<> query_pager::fetch_page(cql3::selection::result_set_builder& builder, uint32_t page_size, gc_clock::time_point now) {

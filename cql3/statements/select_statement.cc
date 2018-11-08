@@ -481,7 +481,7 @@ select_statement::execute(service::storage_proxy& proxy,
                         command,
                         std::move(prange),
                         options.get_consistency(),
-                        {timeout, state.get_trace_state()}).then([] (service::storage_proxy::coordinator_query_result qr) {
+                        {timeout, state.get_query_ptr(), state.get_trace_state()}).then([] (service::storage_proxy::coordinator_query_result qr) {
                     return std::move(qr.query_result);
                 });
             }, std::move(merger));
@@ -489,7 +489,7 @@ select_statement::execute(service::storage_proxy& proxy,
             return this->process_results(std::move(result), cmd, options, now);
         });
     } else {
-        return proxy.query(_schema, cmd, std::move(partition_ranges), options.get_consistency(), {timeout, state.get_trace_state()})
+        return proxy.query(_schema, cmd, std::move(partition_ranges), options.get_consistency(), {timeout, state.get_query_ptr(), state.get_trace_state()})
             .then([this, &options, now, cmd] (service::storage_proxy::coordinator_query_result qr) {
                 return this->process_results(std::move(qr.query_result), cmd, options, now);
             });

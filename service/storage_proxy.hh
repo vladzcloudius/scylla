@@ -109,9 +109,22 @@ public:
         clock_type::time_point _timeout;
 
     public:
+        lw_shared_ptr<sstring> query_string;
         tracing::trace_state_ptr trace_state = nullptr;
         replicas_per_token_range preferred_replicas;
         stdx::optional<db::read_repair_decision> read_repair_decision;
+
+        coordinator_query_options(clock_type::time_point timeout,
+                lw_shared_ptr<sstring> qstring,
+                tracing::trace_state_ptr trace_state = nullptr,
+                replicas_per_token_range preferred_replicas = { },
+                stdx::optional<db::read_repair_decision> read_repair_decision = { })
+            : _timeout(timeout)
+            , query_string(std::move(qstring))
+            , trace_state(std::move(trace_state))
+            , preferred_replicas(std::move(preferred_replicas))
+            , read_repair_decision(read_repair_decision) {
+        }
 
         coordinator_query_options(clock_type::time_point timeout,
                 tracing::trace_state_ptr trace_state = nullptr,
