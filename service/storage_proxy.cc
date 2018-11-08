@@ -88,6 +88,7 @@ namespace service {
 static logging::logger slogger("storage_proxy");
 static logging::logger qlogger("query_result");
 static logging::logger mlogger("mutation_data");
+static logging::logger non_singular_query_logger("non_singular_query");
 
 const sstring storage_proxy::COORDINATOR_STATS_CATEGORY("storage_proxy_coordinator");
 const sstring storage_proxy::REPLICA_STATS_CATEGORY("storage_proxy_replica");
@@ -3432,6 +3433,7 @@ storage_proxy::do_query(schema_ptr s,
         }
     }
 
+    non_singular_query_logger.debug("Handling a non-singular query from {}.{}: {}", s->ks_name(), s->cf_name(), query_options.query_string ? *query_options.query_string : "not set");
     return query_partition_key_range(cmd,
             std::move(partition_ranges),
             cl,
