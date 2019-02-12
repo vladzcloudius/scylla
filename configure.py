@@ -97,7 +97,14 @@ def have_pkg(package):
 
 
 def pkg_config(package, *options):
-    output = subprocess.check_output(['pkg-config'] + list(options) + [package])
+    # Add the current working directory to the search path, if a file is
+    # specified.
+    if package.endswith('.pc'):
+        env = { 'PKG_CONFIG_PATH' : os.path.dirname(package) }
+    else:
+        env = None
+
+    output = subprocess.check_output(['pkg-config'] + list(options) + [package], env=env)
     return output.decode('utf-8').strip()
 
 
