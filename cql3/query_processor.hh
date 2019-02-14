@@ -133,11 +133,13 @@ public:
 
     static prepared_cache_key_type compute_id(
             const std::string_view& query_string,
-            const sstring& keyspace);
+            const sstring& keyspace,
+            const utils::UUID& schema_version);
 
     static prepared_cache_key_type compute_thrift_id(
             const std::string_view& query_string,
-            const sstring& keyspace);
+            const sstring& keyspace,
+            const utils::UUID& schema_version);
 
     static ::shared_ptr<statements::raw::parsed_statement> parse_statement(const std::string_view& query);
 
@@ -322,7 +324,7 @@ public:
             query_options& options,
             std::unordered_map<prepared_cache_key_type, authorized_prepared_statements_cache::value_type> pending_authorization_entries);
 
-    std::unique_ptr<statements::prepared_statement> get_statement(
+    std::pair<schema_ptr, std::unique_ptr<statements::prepared_statement>> get_statement(
             const std::string_view& query,
             const service::client_state& client_state);
 
@@ -393,12 +395,12 @@ private:
             const service::client_state& client_state,
             PreparedKeyGenerator&& id_gen,
             IdGetter&& id_getter) {
+        auto [s, prepared] = get_statement(query_string, client_state);
         return do_with(
-                id_gen(query_string, client_state.get_raw_keyspace()),
+                id_gen(query_string, client_state.get_raw_keyspace(), (s ? s->version() : utils::UUID())),
                 std::move(query_string),
-                [this, &client_state, &id_getter](const prepared_cache_key_type& key, const sstring& query_string) {
-            return _prepared_cache.get(key, [this, &query_string, &client_state] {
-                auto prepared = get_statement(query_string, client_state);
+                [this, &client_state, &id_getter, prepared = std::move(prepared)](const prepared_cache_key_type& key, const sstring& query_string) mutable {
+            return _prepared_cache.get(key, [this, &query_string, &client_state, prepared = std::move(prepared)] () mutable {
                 auto bound_terms = prepared->statement->get_bound_terms();
                 if (bound_terms > std::numeric_limits<uint16_t>::max()) {
                     throw exceptions::invalid_request_exception(
@@ -418,28 +420,6 @@ private:
             });
         });
     };
-
-    template <typename ResultMsgType, typename KeyGenerator, typename IdGetter>
-    ::shared_ptr<cql_transport::messages::result_message::prepared>
-    get_stored_prepared_statement_one(
-            const std::string_view& query_string,
-            const sstring& keyspace,
-            KeyGenerator&& key_gen,
-            IdGetter&& id_getter) {
-        auto cache_key = key_gen(query_string, keyspace);
-        auto it = _prepared_cache.find(cache_key);
-        if (it == _prepared_cache.end()) {
-            return ::shared_ptr<cql_transport::messages::result_message::prepared>();
-        }
-
-        return ::make_shared<ResultMsgType>(id_getter(cache_key), *it);
-    }
-
-    ::shared_ptr<cql_transport::messages::result_message::prepared>
-    get_stored_prepared_statement(
-            const std::string_view& query_string,
-            const sstring& keyspace,
-            bool for_thrift);
 };
 
 class query_processor::migration_subscriber : public service::migration_listener {

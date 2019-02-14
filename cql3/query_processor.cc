@@ -274,7 +274,7 @@ future<::shared_ptr<result_message>>
 query_processor::process(const sstring_view& query_string, service::query_state& query_state, query_options& options) {
     log.trace("process: \"{}\"", query_string);
     tracing::trace(query_state.get_trace_state(), "Parsing a statement");
-    auto p = get_statement(query_string, query_state.get_client_state());
+    auto [s, p] = get_statement(query_string, query_state.get_client_state());
     auto cql_statement = p->statement;
     if (cql_statement->get_bound_terms() != options.get_values_count()) {
         throw exceptions::invalid_request_exception("Invalid amount of bind variables");
@@ -362,27 +362,6 @@ query_processor::prepare(sstring query_string, const service::client_state& clie
     }
 }
 
-::shared_ptr<cql_transport::messages::result_message::prepared>
-query_processor::get_stored_prepared_statement(
-        const std::string_view& query_string,
-        const sstring& keyspace,
-        bool for_thrift) {
-    using namespace cql_transport::messages;
-    if (for_thrift) {
-        return get_stored_prepared_statement_one<result_message::prepared::thrift>(
-                query_string,
-                keyspace,
-                compute_thrift_id,
-                prepared_cache_key_type::thrift_id);
-    } else {
-        return get_stored_prepared_statement_one<result_message::prepared::cql>(
-                query_string,
-                keyspace,
-                compute_id,
-                prepared_cache_key_type::cql_id);
-    }
-}
-
 static bytes md5_calculate(const std::string_view& s) {
     constexpr size_t size = CryptoPP::Weak1::MD5::DIGESTSIZE;
     CryptoPP::Weak::MD5 hash;
@@ -391,38 +370,45 @@ static bytes md5_calculate(const std::string_view& s) {
     return std::move(bytes{reinterpret_cast<const int8_t*>(digest), size});
 }
 
-static sstring hash_target(const std::string_view& query_string, const sstring& keyspace) {
-    return keyspace + std::string(query_string);
+static sstring hash_target(const std::string_view& query_string, const sstring& keyspace, const utils::UUID& schema_version) {
+    return keyspace + std::string(query_string) + schema_version.to_sstring();
 }
 
 prepared_cache_key_type query_processor::compute_id(
         const std::string_view& query_string,
-        const sstring& keyspace) {
-    return prepared_cache_key_type(md5_calculate(hash_target(query_string, keyspace)));
+        const sstring& keyspace,
+        const utils::UUID& schema_version) {
+    return prepared_cache_key_type(md5_calculate(hash_target(query_string, keyspace, schema_version)));
 }
 
 prepared_cache_key_type query_processor::compute_thrift_id(
         const std::string_view& query_string,
-        const sstring& keyspace) {
-    auto target = hash_target(query_string, keyspace);
+        const sstring& keyspace,
+        const utils::UUID& schema_version) {
     uint32_t h = 0;
-    for (auto&& c : hash_target(query_string, keyspace)) {
+    for (auto&& c : hash_target(query_string, keyspace, schema_version)) {
         h = 31*h + c;
     }
     return prepared_cache_key_type(static_cast<int32_t>(h));
 }
 
-std::unique_ptr<prepared_statement>
+std::pair<schema_ptr, std::unique_ptr<prepared_statement>>
 query_processor::get_statement(const sstring_view& query, const service::client_state& client_state) {
     ::shared_ptr<raw::parsed_statement> statement = parse_statement(query);
+    schema_ptr s;
 
     // Set keyspace for statement that require login
     auto cf_stmt = dynamic_pointer_cast<raw::cf_statement>(statement);
     if (cf_stmt) {
         cf_stmt->prepare_keyspace(client_state);
+        if (cf_stmt->cf_name_ptr()) {
+            try {
+                s = _db.find_schema(cf_stmt->keyspace(), cf_stmt->column_family());
+            } catch (...) {}
+        }
     }
     ++_stats.prepare_invocations;
-    return statement->prepare(_db, _cql_stats);
+    return std::make_pair(std::move(s), statement->prepare(_db, _cql_stats));
 }
 
 ::shared_ptr<raw::parsed_statement>

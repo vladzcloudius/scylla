@@ -913,7 +913,8 @@ cql_server::connection::process_batch(uint16_t stream, request_reader in, servic
         switch (kind) {
         case 0: {
             auto query = in.read_long_string_view();
-            stmt_ptr = _server._query_processor.local().get_statement(query, client_state);
+            auto [s, st] = _server._query_processor.local().get_statement(query, client_state);
+            stmt_ptr = std::move(st);
             ps = stmt_ptr->checked_weak_from_this();
             tracing::add_query(client_state.get_trace_state(), query);
             break;

@@ -72,6 +72,10 @@ public:
     virtual const sstring& keyspace() const;
 
     virtual const sstring& column_family() const;
+
+    const ::shared_ptr<cf_name> cf_name_ptr() const {
+        return _cf_name;
+    }
 };
 
 }
