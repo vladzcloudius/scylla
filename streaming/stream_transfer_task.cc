@@ -90,6 +90,11 @@ struct send_info {
     dht::token_range_vector ranges;
     dht::partition_range_vector prs;
     flat_mutation_reader reader;
+    std::chrono::milliseconds timer_for_reader_timeout{60 * 1000};
+    std::chrono::milliseconds timer_for_sink_timeout{60 * 1000};
+    timer<> timer_for_reader;
+    timer<> timer_for_sink;
+    std::optional<dht::decorated_key> current_dk;
     send_info(database& db_, utils::UUID plan_id_, utils::UUID cf_id_,
               dht::token_range_vector ranges_, netw::messaging_service::msg_addr id_,
               uint32_t dst_cpu_id_, stream_reason reason_)
@@ -102,7 +107,15 @@ struct send_info {
         , cf(db.find_column_family(cf_id))
         , ranges(std::move(ranges_))
         , prs(to_partition_ranges(ranges))
-        , reader(cf.make_streaming_reader(cf.schema(), prs)) {
+        , reader(cf.make_streaming_reader(cf.schema(), prs))
+        , timer_for_reader([this] {
+            sslog.info("HANG: plan_id={}, peer={}, reader for ks={}, cf={}, took more than {} ms to read, current_dk={}",
+                    plan_id, id, reader.schema()->ks_name(), reader.schema()->cf_name(), timer_for_reader_timeout.count(), current_dk);
+        })
+        , timer_for_sink([this] {
+            sslog.info("HANG: plan_id={}, peer={}, sink for ks={}, cf={}, took more than {} ms to send, current_dk={}",
+                    plan_id, id, reader.schema()->ks_name(), reader.schema()->cf_name(), timer_for_sink_timeout.count(), current_dk);
+        }) {
     }
     future<size_t> estimate_partitions() {
         return do_with(cf.get_sstables(), size_t(0), [this] (auto& sstables, size_t& partition_count) {
@@ -185,13 +198,37 @@ future<> send_mutation_fragments(lw_shared_ptr<send_info> si) {
         auto sink_op = [sink, si, got_error_from_peer] () mutable -> future<> {
             return do_with(std::move(sink), [si, got_error_from_peer] (rpc::sink<frozen_mutation_fragment>& sink) {
                 return repeat([&sink, si, got_error_from_peer] () mutable {
-                    return si->reader(db::no_timeout).then([&sink, si, s = si->reader.schema(), got_error_from_peer] (mutation_fragment_opt mf) mutable {
+                    auto reader_start_time = std::chrono::steady_clock::now();
+                    si->timer_for_reader.rearm(reader_start_time + si->timer_for_reader_timeout);
+                    return si->reader(db::no_timeout).then([&sink, si, s = si->reader.schema(), got_error_from_peer, reader_start_time] (mutation_fragment_opt mf) mutable {
+                        si->timer_for_reader.cancel();
+                        auto plan_id = si->plan_id;
+                        auto peer = si->id;
+                        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - reader_start_time);
                         if (mf && !(*got_error_from_peer)) {
+                            if (mf->is_partition_start()) {
+                                si->current_dk = mf->as_partition_start().key();
+                            }
                             frozen_mutation_fragment fmf = freeze(*s, *mf);
                             auto size = fmf.representation().size();
+                            if (duration > std::chrono::milliseconds(30)) {
+                                sslog.info("LONG: plan_id={}, peer={}, reader for ks={}, cf={}, took {} ms to read, fmf_size={}, current_dk={}", plan_id, peer, s->ks_name(), s->cf_name(), duration.count(), size, si->current_dk);
+                            }
                             streaming::get_local_stream_manager().update_progress(si->plan_id, si->id.addr, streaming::progress_info::direction::OUT, size);
-                            return sink(fmf).then([] { return stop_iteration::no; });
+                            auto sink_start_time = std::chrono::steady_clock::now();
+                            si->timer_for_sink.rearm(sink_start_time + si->timer_for_sink_timeout);
+                            return sink(fmf).then([si, s, plan_id, peer, sink_start_time, size] {
+                                si->timer_for_sink.cancel();
+                                auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - sink_start_time);
+                                if (duration > std::chrono::milliseconds(30)) {
+                                    sslog.info("LONG: plan_id={}, peer={}, sink for ks={}, cf={}, took {} ms to send, fmf_size={}, current_dk={}", plan_id, peer, s->ks_name(), s->cf_name(), duration.count(), size, si->current_dk);
+                                }
+                                return stop_iteration::no;
+                            });
                         } else {
+                            if (duration > std::chrono::milliseconds(30)) {
+                                sslog.info("LONG: plan_id={}, peer={}, reader for ks={}, cf={}, took {} ms to read, fmf_size=0 (empty mutation_fragment), current_dk={}", plan_id, peer, s->ks_name(), s->cf_name(), duration.count(), si->current_dk);
+                            }
                             return make_ready_future<stop_iteration>(stop_iteration::yes);
                         }
                     });
