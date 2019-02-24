@@ -224,15 +224,56 @@ void stream_session::init_messaging_service_handler() {
         return with_scheduling_group(service::get_local_storage_service().db().local().get_streaming_scheduling_group(), [from, estimated_partitions, plan_id, schema_id, cf_id, source, reason] () mutable {
                 return service::get_schema_for_write(schema_id, from).then([from, estimated_partitions, plan_id, schema_id, cf_id, source, reason] (schema_ptr s) mutable {
                     auto sink = ms().make_sink_for_stream_mutation_fragments(source);
-                    auto get_next_mutation_fragment = [source, plan_id, from, s] () mutable {
-                        return source().then([plan_id, from, s] (stdx::optional<std::tuple<frozen_mutation_fragment>> fmf_opt) mutable {
+                    auto current_dk = make_lw_shared<std::optional<dht::decorated_key>>();
+#if 1
+                    std::chrono::milliseconds timer_for_source_timeout{60 * 1000};
+#else
+                    std::chrono::milliseconds timer_for_source_timeout{3};
+#endif
+                    auto timer_for_source = make_lw_shared<timer<>>([from, plan_id, s, current_dk, timer_for_source_timeout] {
+                        sslog.info("HANG: plan_id={}, peer={}, source for ks={}, cf={}, took more than {} ms to read_source, current_dk={}",
+                        plan_id, from, s->ks_name(), s->cf_name(), timer_for_source_timeout.count(), *current_dk);
+                    });
+                    auto last_time_get_mf_was_called = make_lw_shared<std::chrono::steady_clock::time_point>(std::chrono::steady_clock::now());
+                    auto get_next_mutation_fragment = [current_dk, source, plan_id, from, s, timer_for_source, timer_for_source_timeout, last_time_get_mf_was_called] () mutable {
+                        auto source_start_time = std::chrono::steady_clock::now();
+                        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(source_start_time - *last_time_get_mf_was_called);
+#if 1
+                        if (duration > std::chrono::milliseconds(60 * 1000)) {
+#else
+                        if (duration > std::chrono::milliseconds(3)) {
+#endif
+                            sslog.info("LONG: plan_id={}, peer={}, get_next_mf for ks={}, cf={}, took {} ms to be called, current_dk={}", plan_id, from, s->ks_name(), s->cf_name(), duration.count(), *current_dk);
+                        }
+                        *last_time_get_mf_was_called = source_start_time;
+                        timer_for_source->rearm(source_start_time + timer_for_source_timeout);
+                        return source().then([current_dk, timer_for_source, source_start_time, plan_id, from, s] (stdx::optional<std::tuple<frozen_mutation_fragment>> fmf_opt) mutable {
+                            timer_for_source->cancel();
+                            auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - source_start_time);
                             if (fmf_opt) {
                                 frozen_mutation_fragment& fmf = std::get<0>(fmf_opt.value());
                                 auto sz = fmf.representation().size();
                                 auto mf = fmf.unfreeze(*s);
+                                if (mf.is_partition_start()) {
+                                    *current_dk = mf.as_partition_start().key();
+                                }
                                 streaming::get_local_stream_manager().update_progress(plan_id, from.addr, progress_info::direction::IN, sz);
+#if 1
+                                if (duration > std::chrono::milliseconds(30)) {
+#else
+                                if (duration > std::chrono::milliseconds(1)) {
+#endif
+                                    sslog.info("LONG: plan_id={}, peer={}, source for ks={}, cf={}, took {} ms to read_source, fmf_size={}, current_dk={}", plan_id, from, s->ks_name(), s->cf_name(), duration.count(), sz, *current_dk);
+                                }
                                 return make_ready_future<mutation_fragment_opt>(std::move(mf));
                             } else {
+#if 1
+                                if (duration > std::chrono::milliseconds(30)) {
+#else
+                                if (duration > std::chrono::milliseconds(1)) {
+#endif
+                                    sslog.info("LONG: plan_id={}, peer={}, source for ks={}, cf={}, took {} ms to read_source, fmf_size=0 (empty mutation_fragment_opt), current_dk={}", plan_id, from, s->ks_name(), s->cf_name(), duration.count(), *current_dk);
+                                }
                                 return make_ready_future<mutation_fragment_opt>();
                             }
                         });
