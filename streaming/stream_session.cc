@@ -131,6 +131,7 @@ static auto get_session(utils::UUID plan_id, gms::inet_address from, const char*
     return coordinator->get_or_create_session(from);
 }
 
+#if 0
 static future<bool> check_view_build_ongoing(db::system_distributed_keyspace& sys_dist_ks, const sstring& ks_name, const sstring& cf_name) {
     return sys_dist_ks.view_status(ks_name, cf_name).then([] (std::unordered_map<utils::UUID, sstring>&& view_statuses) {
         return boost::algorithm::any_of(view_statuses | boost::adaptors::map_values, [] (const sstring& view_status) {
@@ -153,6 +154,7 @@ static future<bool> check_needs_view_update_path(db::system_distributed_keyspace
                 std::logical_or<bool>());
     });
 }
+#endif
 
 void stream_session::init_messaging_service_handler() {
     ms().register_prepare_message([] (const rpc::client_info& cinfo, prepare_message msg, UUID plan_id, sstring description, rpc::optional<stream_reason> reason_opt) {
@@ -280,7 +282,8 @@ void stream_session::init_messaging_service_handler() {
                     };
                     distribute_reader_and_consume_on_shards(s, dht::global_partitioner(),
                         make_flat_mutation_reader<generating_reader>(s, std::move(get_next_mutation_fragment)),
-                        [cf_id, plan_id, estimated_partitions, reason] (flat_mutation_reader reader) {
+                        [cf_id, plan_id, estimated_partitions, reason, from] (flat_mutation_reader reader) {
+#if 0
                             auto& cf = service::get_local_storage_service().db().local().find_column_family(cf_id);
 
                             return check_needs_view_update_path(_sys_dist_ks->local(), cf, reason).then([cf = cf.shared_from_this(), estimated_partitions, reader = std::move(reader)] (bool use_view_update_path) mutable {
@@ -300,6 +303,20 @@ void stream_session::init_messaging_service_handler() {
                                     return _view_update_generator->local().register_staging_sstable(sst, std::move(cf));
                                 });
                             });
+#else
+                            return seastar::async([cf_id, plan_id, estimated_partitions, reason, reader = std::move(reader), from] () mutable {
+                                uint64_t nr_mf = 0;
+                                schema_ptr s = reader.schema();
+                                while (true) {
+                                    mutation_fragment_opt mf = reader(db::no_timeout).get0();
+                                    if (!mf) {
+                                        sslog.info("[Stream #{}] Received {} NR_MF from peer={}, from reader for ks={}, cf={}", plan_id, nr_mf, from, s->ks_name(), s->cf_name());
+                                        break;
+                                    }
+                                    nr_mf++;
+                                }
+                            });
+#endif
                         }
                     ).then_wrapped([s, plan_id, from, sink, estimated_partitions] (future<uint64_t> f) mutable {
                         int32_t status = 0;

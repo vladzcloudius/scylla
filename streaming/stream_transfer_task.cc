@@ -196,11 +196,11 @@ future<> send_mutation_fragments(lw_shared_ptr<send_info> si) {
         }();
 
         auto sink_op = [sink, si, got_error_from_peer] () mutable -> future<> {
-            return do_with(std::move(sink), [si, got_error_from_peer] (rpc::sink<frozen_mutation_fragment>& sink) {
-                return repeat([&sink, si, got_error_from_peer] () mutable {
+            return do_with(std::move(sink), uint64_t(0), [si, got_error_from_peer] (rpc::sink<frozen_mutation_fragment>& sink, uint64_t& nr_mf) {
+                return repeat([&sink, &nr_mf, si, got_error_from_peer] () mutable {
                     auto reader_start_time = std::chrono::steady_clock::now();
                     si->timer_for_reader.rearm(reader_start_time + si->timer_for_reader_timeout);
-                    return si->reader(db::no_timeout).then([&sink, si, s = si->reader.schema(), got_error_from_peer, reader_start_time] (mutation_fragment_opt mf) mutable {
+                    return si->reader(db::no_timeout).then([&sink, &nr_mf, si, s = si->reader.schema(), got_error_from_peer, reader_start_time] (mutation_fragment_opt mf) mutable {
                         si->timer_for_reader.cancel();
                         auto plan_id = si->plan_id;
                         auto peer = si->id;
@@ -217,7 +217,8 @@ future<> send_mutation_fragments(lw_shared_ptr<send_info> si) {
                             streaming::get_local_stream_manager().update_progress(si->plan_id, si->id.addr, streaming::progress_info::direction::OUT, size);
                             auto sink_start_time = std::chrono::steady_clock::now();
                             si->timer_for_sink.rearm(sink_start_time + si->timer_for_sink_timeout);
-                            return sink(fmf).then([si, s, plan_id, peer, sink_start_time, size] {
+                            return sink(fmf).then([&nr_mf, si, s, plan_id, peer, sink_start_time, size] {
+                                nr_mf++;
                                 si->timer_for_sink.cancel();
                                 auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - sink_start_time);
                                 if (duration > std::chrono::milliseconds(30)) {
@@ -229,6 +230,7 @@ future<> send_mutation_fragments(lw_shared_ptr<send_info> si) {
                             if (duration > std::chrono::milliseconds(30)) {
                                 sslog.info("LONG: plan_id={}, peer={}, reader for ks={}, cf={}, took {} ms to read, fmf_size=0 (empty mutation_fragment), current_dk={}", plan_id, peer, s->ks_name(), s->cf_name(), duration.count(), si->current_dk);
                             }
+                            sslog.info("[Stream #{}] Sent {} NR_MF to peer={} for ks={}, cf={}", plan_id, nr_mf, peer, s->ks_name(), s->cf_name());
                             return make_ready_future<stop_iteration>(stop_iteration::yes);
                         }
                     });
