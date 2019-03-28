@@ -345,16 +345,46 @@ public:
 
     typedef std::function<future<>(fragmented_temporary_buffer, replay_position)> commit_load_reader_func;
 
-    class segment_data_corruption_error: public std::runtime_error {
+    class bad_segment_error {
+        static constexpr const char* _default_str = "Bad segment error";
+    public:
+        const char* what() const noexcept {
+            const std::exception* eptr = dynamic_cast<const std::exception*>(this);
+            if (!eptr) {
+                return _default_str;
+            } else {
+                return eptr->what();
+            }
+        }
+        virtual ~bad_segment_error() {}
+    };
+
+    class segment_data_corruption_error: public std::runtime_error, public bad_segment_error {
     public:
         segment_data_corruption_error(std::string msg, uint64_t s)
-                : std::runtime_error(msg), _bytes(s) {
+                : std::runtime_error(msg), bad_segment_error(), _bytes(s) {
         }
         uint64_t bytes() const {
             return _bytes;
         }
     private:
         uint64_t _bytes;
+    };
+
+    class invalid_segment_format : public std::invalid_argument, public bad_segment_error {
+    public:
+        invalid_segment_format()
+                : std::invalid_argument("Not a scylla format commitlog file")
+                , bad_segment_error()
+        {}
+    };
+
+    class header_checksum_error : public std::runtime_error, public bad_segment_error {
+    public:
+        header_checksum_error()
+                : std::runtime_error("Checksum error in file header")
+                , bad_segment_error()
+        {}
     };
 
     static future<std::unique_ptr<subscription<fragmented_temporary_buffer, replay_position>>> read_log_file(
