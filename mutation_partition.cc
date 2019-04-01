@@ -2030,6 +2030,7 @@ future<> data_query(
         return make_ready_future<>();
     }
 
+    tracing::trace(trace_ptr, "Looking up for a querier");
     auto querier_opt = cache_ctx.lookup_data_querier(*s, range, slice, trace_ptr);
     auto q = querier_opt
             ? std::move(*querier_opt)
@@ -2037,8 +2038,10 @@ future<> data_query(
 
     return do_with(std::move(q), [=, &builder, trace_ptr = std::move(trace_ptr), cache_ctx = std::move(cache_ctx)] (query::data_querier& q) mutable {
         auto qrb = query_result_builder(*s, builder);
+        tracing::trace(trace_ptr, "Going to consume a page");
         return q.consume_page(std::move(qrb), row_limit, partition_limit, query_time, timeout).then(
                 [=, &builder, &q, trace_ptr = std::move(trace_ptr), cache_ctx = std::move(cache_ctx)] () mutable {
+            tracing::trace(trace_ptr, "Page consumed");
             if (q.are_limits_reached() || builder.is_short_read()) {
                 cache_ctx.insert(std::move(q), std::move(trace_ptr));
             }

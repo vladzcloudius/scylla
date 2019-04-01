@@ -649,11 +649,13 @@ memtable::make_flat_reader(schema_ptr s,
                       mutation_reader::forwarding fwd_mr) {
     if (query::is_single_partition(range) && !fwd_mr) {
         const query::ring_position& pos = range.start()->value();
-        auto snp = _read_section(*this, [&] () -> partition_snapshot_ptr {
+        auto snp = _read_section(*this, [&, trace_state_ptr] () -> partition_snapshot_ptr {
             managed_bytes::linearization_context_guard lcg;
             auto i = partitions.find(pos, memtable_entry::compare(_schema));
             if (i != partitions.end()) {
+                tracing::trace(trace_state_ptr, "memtable: found a key {}", i->key());
                 upgrade_entry(*i);
+                tracing::trace(trace_state_ptr, "memtable: done upgrading a key {}", i->key());
                 return i->snapshot(*this);
             } else {
                 return { };

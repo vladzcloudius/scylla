@@ -310,7 +310,8 @@ flat_mutation_reader make_range_sstable_reader(schema_ptr s,
         mutation_reader::forwarding fwd_mr,
         sstables::read_monitor_generator& monitor_generator)
 {
-    auto reader_factory_fn = [s, &slice, &pc, resource_tracker, fwd, fwd_mr, &monitor_generator] (sstables::shared_sstable& sst, const dht::partition_range& pr) {
+    auto reader_factory_fn = [s, &slice, &pc, resource_tracker, fwd, fwd_mr, &monitor_generator, trace_state] (sstables::shared_sstable& sst, const dht::partition_range& pr) {
+        tracing::trace(trace_state, "Reading a range {} from sstable {}", pr, seastar::value_of([&sst] { return sst->get_filename(); }));
         return sst->read_range_rows_flat(s, pr, slice, pc, resource_tracker, fwd, fwd_mr, monitor_generator(sst));
     };
     return make_combined_reader(s, std::make_unique<incremental_reader_selector>(s,
@@ -435,7 +436,9 @@ table::make_reader(schema_ptr s,
                            tracing::trace_state_ptr trace_state,
                            streamed_mutation::forwarding fwd,
                            mutation_reader::forwarding fwd_mr) const {
+    tracing::trace(trace_state, "Creating a reader: range {}, slice {} priority class {}", range, slice, pc.id());
     if (_virtual_reader) {
+        tracing::trace(trace_state, "Creating a virtual reader");
         return (*_virtual_reader).make_reader(s, range, slice, pc, trace_state, fwd, fwd_mr);
     }
 
@@ -462,18 +465,23 @@ table::make_reader(schema_ptr s,
     // https://github.com/scylladb/scylla/issues/309
     // https://github.com/scylladb/scylla/issues/185
 
+    tracing::trace(trace_state, "Creating readers for {} memtable(s)", _memtables->size());
     for (auto&& mt : *_memtables) {
         readers.emplace_back(mt->make_flat_reader(s, range, slice, pc, trace_state, fwd, fwd_mr));
     }
 
     if (_config.enable_cache && !slice.options.contains(query::partition_slice::option::bypass_cache)) {
-        readers.emplace_back(_cache.make_reader(s, range, slice, pc, std::move(trace_state), fwd, fwd_mr));
+        tracing::trace(trace_state, "Creating a cache reader");
+        readers.emplace_back(_cache.make_reader(s, range, slice, pc, trace_state, fwd, fwd_mr));
     } else {
-        readers.emplace_back(make_sstable_reader(s, _sstables, range, slice, pc, std::move(trace_state), fwd, fwd_mr));
+        tracing::trace(trace_state, "Creating an sstables reader");
+        readers.emplace_back(make_sstable_reader(s, _sstables, range, slice, pc, trace_state, fwd, fwd_mr));
     }
 
+    tracing::trace(trace_state, "Creating a combined reader");
     auto comb_reader = make_combined_reader(s, std::move(readers), fwd, fwd_mr);
     if (_config.data_listeners && !_config.data_listeners->empty()) {
+        tracing::trace(trace_state, "Signaling to data read listeners");
         return _config.data_listeners->on_read(s, range, slice, std::move(comb_reader));
     } else {
         return comb_reader;
@@ -2347,19 +2355,32 @@ table::query(schema_ptr s,
         uint64_t max_size,
         db::timeout_clock::time_point timeout,
         query::querier_cache_context cache_ctx) {
+
+    tracing::trace(trace_state, "table::query: Start");
+
     utils::latency_counter lc;
     _stats.reads.set_latency(lc);
     auto f = opts.request == query::result_request::only_digest
              ? memory_limiter.new_digest_read(max_size) : memory_limiter.new_data_read(max_size);
+
+    tracing::trace(trace_state, "table::query: Generated a memory_limiter for {} bytes", max_size);
+
     return f.then([this, lc, s = std::move(s), &cmd, opts, &partition_ranges,
             trace_state = std::move(trace_state), timeout, cache_ctx = std::move(cache_ctx)] (query::result_memory_accounter accounter) mutable {
+
+        tracing::trace(trace_state, "table::query: Acquired a memory_limiter grant");
+
         auto qs_ptr = std::make_unique<query_state>(std::move(s), cmd, opts, partition_ranges, std::move(accounter));
         auto& qs = *qs_ptr;
-        return do_until(std::bind(&query_state::done, &qs), [this, &qs, trace_state = std::move(trace_state), timeout, cache_ctx = std::move(cache_ctx)] {
+        return do_until(std::bind(&query_state::done, &qs), [this, &qs, trace_state, timeout, cache_ctx = std::move(cache_ctx)] {
             auto&& range = *qs.current_partition_range++;
+            tracing::trace(trace_state, "table::query: Going to read {} range, slice {}", range, qs.cmd.slice);
             return data_query(qs.schema, as_mutation_source(), range, qs.cmd.slice, qs.remaining_rows(),
                               qs.remaining_partitions(), qs.cmd.timestamp, qs.builder, trace_state, timeout, cache_ctx);
-        }).then([qs_ptr = std::move(qs_ptr), &qs] {
+        }).then([qs_ptr = std::move(qs_ptr), trace_state, &qs] {
+
+            tracing::trace(trace_state, "table::query: Done scanning, preparing a result");
+
             return make_ready_future<lw_shared_ptr<query::result>>(
                     make_lw_shared<query::result>(qs.builder.build()));
         }).finally([lc, this]() mutable {

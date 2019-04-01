@@ -207,8 +207,11 @@ static bool has_clustering_keys(const schema& s, const query::read_command& cmd)
                 cql3::selection::result_set_builder(*_selection, now,
                         _options.get_cql_serialization_format()),
                 [this, page_size, now, timeout](auto& builder) {
-                    return this->fetch_page(builder, page_size, now, timeout).then([&builder] {
-                        return builder.build();
+                    return this->fetch_page(builder, page_size, now, timeout).then([this, page_size, &builder] {
+                        tracing::trace(_state.get_trace_state(), "Fetched the next page ({} bytes), going to build a result set", page_size);
+                        auto res_set = builder.build();
+                        tracing::trace(_state.get_trace_state(), "Done building a result set");
+                        return res_set;
                     });
                 });
     }
@@ -217,7 +220,9 @@ future<cql3::result_generator> query_pager::fetch_page_generator(uint32_t page_s
     return do_fetch_page(page_size, now, timeout).then([this, page_size, now, &stats] (service::storage_proxy::coordinator_query_result qr) {
         _last_replicas = std::move(qr.last_replicas);
         _query_read_repair_decision = qr.read_repair_decision;
+        tracing::trace(_state.get_trace_state(), "Fetched a page: size: {} bytes, read repair decision: {}", page_size, _query_read_repair_decision);
         handle_result(noop_visitor(), qr.query_result, page_size, now);
+        tracing::trace(_state.get_trace_state(), "Done handling the result");
         return cql3::result_generator(_schema, std::move(qr.query_result), _cmd, _selection, stats);
     });
 }

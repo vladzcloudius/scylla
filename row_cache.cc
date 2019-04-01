@@ -364,6 +364,7 @@ private:
     future<> create_reader(db::timeout_clock::time_point timeout) {
         auto src_and_phase = _cache.snapshot_of(_read_context->range().start()->value());
         auto phase = src_and_phase.phase;
+        tracing::trace(_read_context->trace_state(), "cache: begin inserting: key {}, slice {}", _read_context->range(), _read_context->slice());
         _read_context->enter_partition(_read_context->range().start()->value().as_decorated_key(), src_and_phase.snapshot, phase);
         return _read_context->create_underlying(false, timeout).then([this, phase, timeout] {
           return _read_context->underlying().underlying()(timeout).then([this, phase] (auto&& mfopt) {
@@ -399,6 +400,8 @@ private:
                 this->push_mutation_fragment(std::move(*mfopt));
             }
           });
+        }).finally([this] {
+            tracing::trace(_read_context->trace_state(), "cache: done inserting: key {}, slice {}", _read_context->range(), _read_context->slice());
         });
     }
 public:
@@ -750,11 +753,13 @@ row_cache::make_reader(schema_ptr s,
                     cache_entry& e = *i;
                     upgrade_entry(e);
                     on_partition_hit();
+                    tracing::trace(ctx->trace_state(), "cache: hit: range {}, slice {} priority class {}", ctx->range(), ctx->slice(), ctx->pc().id());
                     return e.read(*this, *ctx);
                 } else if (i->continuous()) {
                     return make_empty_flat_reader(std::move(s));
                 } else {
                     on_partition_miss();
+                    tracing::trace(ctx->trace_state(), "cache: miss: range {}, slice {} priority class {}", ctx->range(), ctx->slice(), ctx->pc().id());
                     return make_flat_mutation_reader<single_partition_populating_reader>(*this, std::move(ctx));
                 }
             });
