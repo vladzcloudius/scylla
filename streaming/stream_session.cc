@@ -691,11 +691,6 @@ void stream_session::init(shared_ptr<stream_result_future> stream_result_) {
                 this->_last_stream_bytes = sbytes;
                 this->_last_stream_progress = now;
                 this->start_keep_alive_timer();
-            } else if (now - this->_last_stream_progress >= this->_keep_alive_timeout) {
-                // Timeout
-                sslog.info("[Stream #{}] The session {} is idle for {} seconds, the peer {} is probably gone, close it",
-                        plan_id, this, this->_keep_alive_timeout.count(), peer);
-                this->on_error();
             } else {
                 // Start the timer to check again
                 sslog.info("[Stream #{}] The session {} made no progress with peer {}", plan_id, this, peer);

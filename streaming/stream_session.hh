@@ -180,8 +180,6 @@ private:
     bool _complete_sent = false;
     bool _received_failed_complete_message = false;
 
-    // If the session is idle for 10 minutes, close the session
-    std::chrono::seconds _keep_alive_timeout{60 * 10};
     // Check every 1 minutes
     std::chrono::seconds _keep_alive_interval{60};
     timer<lowres_clock> _keep_alive;
