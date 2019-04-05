@@ -200,12 +200,14 @@ void stream_session::init_messaging_service_handler() {
                     return service::get_storage_proxy().local().mutate_streaming_mutation(std::move(s), plan_id, fm, fragmented).then_wrapped([plan_id, cf_id, from] (auto&& f) {
                         try {
                             f.get();
+                            sslog.debug("[Stream #{}] STREAM_MUTATION from {}: cf_id={}: successfully applied", plan_id, from.addr, cf_id);
                             return make_ready_future<>();
                         } catch (no_such_column_family&) {
                             sslog.warn("[Stream #{}] STREAM_MUTATION from {}: cf_id={} is missing, assume the table is dropped",
                                        plan_id, from.addr, cf_id);
                             return make_ready_future<>();
                         } catch (...) {
+                            sslog.debug("[Stream #{}] STREAM_MUTATION from {}: cf_id={}: failed to apply: {}", plan_id, from.addr, cf_id, std::current_exception());
                             throw;
                         }
                         return make_ready_future<>();
@@ -214,6 +216,7 @@ void stream_session::init_messaging_service_handler() {
             });
         });
     });
+    // When these are used?
     ms().register_stream_mutation_fragments([] (const rpc::client_info& cinfo, UUID plan_id, UUID schema_id, UUID cf_id, uint64_t estimated_partitions, rpc::optional<stream_reason> reason_opt, rpc::source<frozen_mutation_fragment> source) {
         auto from = netw::messaging_service::get_source(cinfo);
         auto reason = reason_opt ? *reason_opt: stream_reason::unspecified;
@@ -297,6 +300,7 @@ void stream_session::init_messaging_service_handler() {
                     for (auto& range : ranges) {
                         query_ranges.push_back(dht::to_partition_range(range));
                     }
+                    // Is it where we flush streamed mutations from memtables to the disk?
                     return cf.flush_streaming_mutations(plan_id, std::move(query_ranges));
                 } catch (no_such_column_family&) {
                     sslog.warn("[Stream #{}] STREAM_MUTATION_DONE from {}: cf_id={} is missing, assume the table is dropped",
@@ -307,6 +311,9 @@ void stream_session::init_messaging_service_handler() {
                 }
             }).then([session, cf_id] {
                 session->receive_task_completed(cf_id);
+            }).finally([plan_id, from, cf_id] {
+                // We need a log here to see if memtable flushing is stuck or not
+                sslog.debug("[Stream #{}] STREAM_MUTATION from {}: cf_id={}: register_stream_mutation_done handling is complete ", plan_id, from.addr, cf_id);
             });
         });
     });
