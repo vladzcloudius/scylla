@@ -371,7 +371,7 @@ void stream_session::init_messaging_service_handler() {
                 session->receive_task_completed(cf_id);
             }).finally([plan_id, from, cf_id] {
                 // We need a log here to see if memtable flushing is stuck or not
-                sslog.debug("[Stream #{}] STREAM_MUTATION from {}: cf_id={}: register_stream_mutation_done handling is complete ", plan_id, from.addr, cf_id);
+                sslog.debug("[Stream #{}] STREAM_MUTATION from {}: cf_id={}: register_stream_mutation_done handling is complete ", plan_id, from, cf_id);
             });
         });
     });
