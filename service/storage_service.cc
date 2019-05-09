@@ -822,7 +822,14 @@ void storage_service::bootstrap(std::unordered_set<token> tokens) {
 
     set_mode(mode::JOINING, "Starting to bootstrap...", true);
     dht::boot_strapper bs(_db, get_broadcast_address(), tokens, _token_metadata);
-    bs.bootstrap().get(); // handles token update
+    try {
+        bs.bootstrap().get(); // handles token update
+    } catch(...) {
+        stop_gossiping().get();
+        drain_on_shutdown().get();
+        throw;
+    }
+
     slogger.info("Bootstrap completed! for the tokens {}", tokens);
 }
 

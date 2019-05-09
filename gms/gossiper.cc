@@ -1820,7 +1820,14 @@ future<> gossiper::do_stop_gossiping() {
         }
         if (my_ep_state && !is_silent_shutdown_state(*my_ep_state)) {
             logger.info("Announcing shutdown");
-            add_local_application_state(application_state::STATUS, _value_factory.shutdown(true)).get();
+
+            // Don't touch a BOOTSTRAPPING node status!!!
+            if (get_gossip_status(*my_ep_state) != gms::versioned_value::STATUS_BOOTSTRAPPING) {
+                add_local_application_state(application_state::STATUS, _value_factory.shutdown(true)).get();
+            } else {
+                logger.debug("We were bootstrapping. Let's stay in this state.");
+            }
+
             for (inet_address addr : _live_endpoints) {
                 msg_addr id = get_msg_addr(addr);
                 logger.trace("Sending a GossipShutdown to {}", id);
@@ -1952,7 +1959,15 @@ void gossiper::mark_as_shutdown(const inet_address& endpoint) {
     auto es = get_endpoint_state_for_endpoint_ptr(endpoint);
     if (es) {
         auto& ep_state = *es;
-        ep_state.add_application_state(application_state::STATUS, _value_factory.shutdown(true));
+        sstring ep_status = get_gossip_status(ep_state);
+
+        if (ep_status == gms::versioned_value::STATUS_BOOTSTRAPPING) {
+            // set the node to DOWN state - keep the status as is
+            ep_state.mark_dead();
+        } else {
+            ep_state.add_application_state(application_state::STATUS, _value_factory.shutdown(true));
+        }
+
         ep_state.get_heart_beat_state().force_highest_possible_version_unsafe();
         replicate(endpoint, ep_state).get();
         mark_dead(endpoint, ep_state);
