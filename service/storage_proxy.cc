@@ -1013,9 +1013,10 @@ storage_proxy::create_write_response_handler(const mutation& m, db::consistency_
     slogger.trace("creating write handler for token: {} natural: {} pending: {}", m.token(), natural_endpoints, pending_endpoints);
     tracing::trace(tr_state, "Creating write handler for token: {} natural: {} pending: {}", m.token(), natural_endpoints ,pending_endpoints);
 
-    // filter out naturale_endpoints from pending_endpoint if later is not yet updated during node join
-    auto itend = boost::range::remove_if(pending_endpoints, [&natural_endpoints] (gms::inet_address& p) {
-        return boost::range::find(natural_endpoints, p) != natural_endpoints.end();
+    // filter out natural_endpoints and dead nodes from pending_endpoint if later is not yet updated during node join
+    gms::gossiper& local_gossiper = gms::get_local_gossiper();
+    auto itend = boost::range::remove_if(pending_endpoints, [&natural_endpoints, &local_gossiper] (gms::inet_address& p) {
+        return !local_gossiper.is_alive(p) || boost::range::find(natural_endpoints, p) != natural_endpoints.end();
     });
     pending_endpoints.erase(itend, pending_endpoints.end());
 
