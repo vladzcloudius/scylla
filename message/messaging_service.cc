@@ -826,14 +826,14 @@ future<> messaging_service::send_gossip_echo(msg_addr id) {
     return send_message_timeout<void>(this, messaging_verb::GOSSIP_ECHO, std::move(id), 3000ms);
 }
 
-void messaging_service::register_gossip_shutdown(std::function<rpc::no_wait_type (inet_address from)>&& func) {
+void messaging_service::register_gossip_shutdown(std::function<rpc::no_wait_type (inet_address from, rpc::optional<bool> bootstrap)>&& func) {
     register_handler(this, messaging_verb::GOSSIP_SHUTDOWN, std::move(func));
 }
 void messaging_service::unregister_gossip_shutdown() {
     _rpc->unregister_handler(netw::messaging_verb::GOSSIP_SHUTDOWN);
 }
-future<> messaging_service::send_gossip_shutdown(msg_addr id, inet_address from) {
-    return send_message_oneway(this, messaging_verb::GOSSIP_SHUTDOWN, std::move(id), std::move(from));
+future<> messaging_service::send_gossip_shutdown(msg_addr id, inet_address from, bool bootstrap) {
+    return send_message_oneway(this, messaging_verb::GOSSIP_SHUTDOWN, std::move(id), std::move(from), bootstrap);
 }
 
 // gossip syn

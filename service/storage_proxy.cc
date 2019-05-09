@@ -3641,4 +3641,25 @@ storage_proxy::stop() {
     return make_ready_future<>();
 }
 
+future<> storage_proxy::remove_from_pending_write_handlers(gms::inet_address endpoint) {
+    // _response_handlers is a very dynamic map since write requests come and go very fast.
+    //
+    // Copy shared pointers for currently pending write handlers aside and work on this copy in order to prevent a race
+    // that may lead to a use-after-free event.
+    utils::chunked_vector<std::pair<response_id_type, ::shared_ptr<abstract_write_response_handler>>> response_handlers_copy(_response_handlers.begin(), _response_handlers.end());
+    return do_with(std::move(response_handlers_copy), [endpoint, this, proxy_ptr = shared_from_this()] (auto& handlers) mutable {
+        return do_for_each(handlers, [endpoint, this] (std::pair<response_id_type, ::shared_ptr<abstract_write_response_handler>>& pair) {
+            auto& [resp_id, hdl_ptr] = pair;
+            try {
+                // Simulate a completion as if it came from the given endpoint. This will effectively make all relevant handlers not
+                // to wait for a response from it anymore.
+                got_response(resp_id, endpoint, get_view_update_backlog());
+            } catch(...) {
+                slogger.trace("Failed to simulate a completion from {} to request {}", endpoint, resp_id);
+            }
+            return make_ready_future<>();
+        }).finally([proxy_ptr = std::move(proxy_ptr)] {});
+    });
+}
+
 }

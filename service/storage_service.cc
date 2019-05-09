@@ -110,6 +110,7 @@ static const sstring TRUNCATION_TABLE = "TRUNCATION_TABLE";
 static const sstring CORRECT_STATIC_COMPACT_IN_MC = "CORRECT_STATIC_COMPACT_IN_MC";
 static const sstring UNBOUNDED_RANGE_TOMBSTONES_FEATURE = "UNBOUNDED_RANGE_TOMBSTONES";
 static const sstring VIEW_VIRTUAL_COLUMNS = "VIEW_VIRTUAL_COLUMNS";
+static const sstring BOOTSTRAP_GRACEFUL_SHUTDOWN = "BOOTSTRAP_GRACEFUL_SHUTDOWN";
 
 static const sstring SSTABLE_FORMAT_PARAM_NAME = "sstable_format";
 
@@ -162,6 +163,7 @@ storage_service::storage_service(distributed<database>& db, gms::gossiper& gossi
         , _correct_static_compact_in_mc(_feature_service, CORRECT_STATIC_COMPACT_IN_MC)
         , _unbounded_range_tombstones_feature(_feature_service, UNBOUNDED_RANGE_TOMBSTONES_FEATURE)
         , _view_virtual_columns(_feature_service, VIEW_VIRTUAL_COLUMNS)
+        , _bootstrap_graceful_shutdown(_feature_service, BOOTSTRAP_GRACEFUL_SHUTDOWN)
         , _la_feature_listener(*this, _feature_listeners_sem, sstables::sstable_version_types::la)
         , _mc_feature_listener(*this, _feature_listeners_sem, sstables::sstable_version_types::mc)
         , _replicate_action([this] { return do_replicate_to_all_cores(); })
@@ -208,6 +210,7 @@ void storage_service::enable_all_features() {
         std::ref(_correct_static_compact_in_mc),
         std::ref(_unbounded_range_tombstones_feature),
         std::ref(_view_virtual_columns),
+        std::ref(_bootstrap_graceful_shutdown)
     })
     {
         if (features.count(f.name())) {
@@ -311,6 +314,7 @@ std::set<sstring> storage_service::get_config_supported_features_set() {
         TRUNCATION_TABLE,
         CORRECT_STATIC_COMPACT_IN_MC,
         VIEW_VIRTUAL_COLUMNS,
+        BOOTSTRAP_GRACEFUL_SHUTDOWN
     };
 
     // Do not respect config in the case database is not started
@@ -822,7 +826,17 @@ void storage_service::bootstrap(std::unordered_set<token> tokens) {
 
     set_mode(mode::JOINING, "Starting to bootstrap...", true);
     dht::boot_strapper bs(_db, get_broadcast_address(), tokens, _token_metadata);
-    bs.bootstrap().get(); // handles token update
+    try {
+        bs.bootstrap().get(); // handles token update
+    } catch(...) {
+        slogger.info("Bootstrap failed! Going to stop the Gossip...");
+        stop_gossiping().get();
+        slogger.info("Gossip is stopped. Continue to draining the Storage Service before shutdown...");
+        drain_on_shutdown().get();
+        slogger.info("Storage Service is drained. Continue node's shutdown...");
+        throw;
+    }
+
     slogger.info("Bootstrap completed! for the tokens {}", tokens);
 }
 

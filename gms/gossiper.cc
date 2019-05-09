@@ -321,14 +321,14 @@ future<> gossiper::handle_echo_msg() {
     return make_ready_future<>();
 }
 
-future<> gossiper::handle_shutdown_msg(inet_address from) {
+future<> gossiper::handle_shutdown_msg(inet_address from, seastar::rpc::optional<bool> bootstrap) {
     set_last_processed_message_at();
     if (!is_enabled()) {
         logger.debug("Ignoring shutdown message from {} because gossip is disabled", from);
         return make_ready_future<>();
     }
-    return seastar::async([this, from] {
-        this->mark_as_shutdown(from);
+    return seastar::async([this, from, bootstrap] {
+        this->mark_as_shutdown(from, bootstrap);
     });
 }
 
@@ -370,9 +370,9 @@ void gossiper::init_messaging_service_handler(bind_messaging_port do_bind) {
             return gms::get_local_gossiper().handle_echo_msg();
         });
     });
-    ms().register_gossip_shutdown([] (inet_address from) {
-        smp::submit_to(0, [from] {
-            return gms::get_local_gossiper().handle_shutdown_msg(from);
+    ms().register_gossip_shutdown([] (inet_address from, seastar::rpc::optional<bool> bootstrap) {
+        smp::submit_to(0, [from, bootstrap] {
+            return gms::get_local_gossiper().handle_shutdown_msg(from, bootstrap);
         }).handle_exception([] (auto ep) {
             logger.warn("Fail to handle GOSSIP_SHUTDOWN: {}", ep);
         });
@@ -838,7 +838,7 @@ void gossiper::convict(inet_address endpoint, double phi) {
         logger.trace("    phi={}, is_dead_state={}", phi, is_dead_state(*state));
     }
     if (is_shutdown(endpoint)) {
-        mark_as_shutdown(endpoint);
+        mark_as_shutdown(endpoint, false);
     } else {
         mark_dead(endpoint, *state);
     }
@@ -1419,7 +1419,7 @@ void gossiper::handle_major_state_change(inet_address ep, const endpoint_state& 
     }
     // check this at the end so nodes will learn about the endpoint
     if (is_shutdown(ep)) {
-        mark_as_shutdown(ep);
+        mark_as_shutdown(ep, false);
     }
 }
 
@@ -1443,6 +1443,17 @@ bool gossiper::is_normal(const inet_address& endpoint) const {
 
 bool gossiper::is_silent_shutdown_state(const endpoint_state& ep_state) const{
     sstring state = get_gossip_status(ep_state);
+
+    if (state == gms::versioned_value::STATUS_BOOTSTRAPPING) {
+        if (service::get_local_storage_service().cluster_supports_bootstrap_graceful_shutdown()) {
+            logger.trace("We are in a BOOTSTRAPPING state and the cluster supports a graceful shutdown from this state.");
+            return false;
+        } else {
+            logger.warn("We are in a BOOTSTRAPPING state and the cluster doesn't support a graceful shutdown from this state. We will silently go DOWN.");
+            return true;
+        }
+    }
+
     for (auto& deadstate : SILENT_SHUTDOWN_STATES) {
         if (state == deadstate) {
             return true;
@@ -1820,11 +1831,20 @@ future<> gossiper::do_stop_gossiping() {
         }
         if (my_ep_state && !is_silent_shutdown_state(*my_ep_state)) {
             logger.info("Announcing shutdown");
-            add_local_application_state(application_state::STATUS, _value_factory.shutdown(true)).get();
+            bool is_bootstrapping = get_gossip_status(*my_ep_state) == gms::versioned_value::STATUS_BOOTSTRAPPING;
+
+            // Don't touch a BOOTSTRAPPING application status: if we were bootstrapping (probably failed) and want to shut
+            // ourselves down we want to keep a BOOTSTRAPPING application status in order to prevent the node from joining the ring.
+            // If other nodes see the status of the node as SHUTDOWN they will interpret it as if the node has joined
+            // the ring.
+            if (!is_bootstrapping) {
+                add_local_application_state(application_state::STATUS, _value_factory.shutdown(true)).get();
+            }
+
             for (inet_address addr : _live_endpoints) {
                 msg_addr id = get_msg_addr(addr);
                 logger.trace("Sending a GossipShutdown to {}", id);
-                ms().send_gossip_shutdown(id, get_broadcast_address()).then_wrapped([id] (auto&&f) {
+                ms().send_gossip_shutdown(id, get_broadcast_address(), is_bootstrapping).then_wrapped([id] (auto&&f) {
                     try {
                         f.get();
                         logger.trace("Got GossipShutdown Reply");
@@ -1945,16 +1965,45 @@ const versioned_value* gossiper::get_application_state_ptr(inet_address endpoint
  * @param endpoint endpoint that has shut itself down
  */
 // Runs inside seastar::async context
-void gossiper::mark_as_shutdown(const inet_address& endpoint) {
+void gossiper::mark_as_shutdown(const inet_address& endpoint, seastar::rpc::optional<bool> bootstrap) {
     auto es = get_endpoint_state_for_endpoint_ptr(endpoint);
     if (es) {
         auto& ep_state = *es;
-        ep_state.add_application_state(application_state::STATUS, _value_factory.shutdown(true));
-        ep_state.get_heart_beat_state().force_highest_possible_version_unsafe();
-        replicate(endpoint, ep_state).get();
-        mark_dead(endpoint, ep_state);
-        fd().force_conviction(endpoint);
+        sstring ep_status = get_gossip_status(ep_state);
+
+        // If 'bootstrap' is not set then this means that RPC has been sent by a node that doesn't support
+        // BOOTSTRAP_SHUTDOWN feature and hence the 'endpoint' may not have a BOOTSTRAPPING status.
+        //
+        // Otherwise, if it IS set, we want to rely on its value rather than on the value of the endpoint status because
+        // it may be not up to date (e.g. it may be empty) due to the gossip nature. Therefore relying on the local
+        // value of the endpoint status we may mistakenly move the node that failed bootstrapping into a SHUTDOWN state
+        // thereby forcing it into the ring, which would be rather unfortunate.
+        bool sender_is_bootstrapping = bootstrap ? *bootstrap : false;
+        logger.trace("{}: mark_as_shutdown: sender_is_bootstrapping is {}", endpoint, sender_is_bootstrapping);
+
+        // Sanity check
+        if ((ep_status == gms::versioned_value::STATUS_BOOTSTRAPPING) != sender_is_bootstrapping) {
+            logger.warn("Endpoint {} status is inconsistent: is_bootstrapping {}, ep_status \"{}\"", endpoint, sender_is_bootstrapping, ep_status);
+        }
+
+        if (!sender_is_bootstrapping) {
+            ep_state.add_application_state(application_state::STATUS, _value_factory.shutdown(true));
+            ep_state.get_heart_beat_state().force_highest_possible_version_unsafe();
+            mark_dead(endpoint, ep_state);
+            replicate(endpoint, ep_state).get();
+            fd().force_conviction(endpoint);
+        } else {
+            // If the node that is going down is a bootstrapping node this means that bootstrapping has failed.
+            // Let's void its ring membership immediately.
+            remove_endpoint(endpoint); // will put it in _just_removed_endpoints to respect quarantine delay
+            evict_from_membership(endpoint); // can get rid of the state immediately
+            service::get_storage_proxy().invoke_on_all([endpoint](service::storage_proxy& local_proxy) {
+                return local_proxy.remove_from_pending_write_handlers(endpoint);
+            }).get();
+        }
     }
+
+    logger.trace("mark_as_shutdown is done for {}", endpoint);
 }
 
 void gossiper::force_newer_generation() {

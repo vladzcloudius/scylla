@@ -60,6 +60,7 @@
 #include <set>
 #include <seastar/core/condition-variable.hh>
 #include <seastar/core/metrics_registration.hh>
+#include <seastar/rpc/rpc_types.hh>
 
 namespace db {
 class config;
@@ -108,7 +109,7 @@ private:
     future<> handle_ack_msg(msg_addr from, gossip_digest_ack ack_msg);
     future<> handle_ack2_msg(gossip_digest_ack2 msg);
     future<> handle_echo_msg();
-    future<> handle_shutdown_msg(inet_address from);
+    future<> handle_shutdown_msg(inet_address from, seastar::rpc::optional<bool> bootstrap);
     static constexpr uint32_t _default_cpuid = 0;
     msg_addr get_msg_addr(inet_address to);
     void do_sort(utils::chunked_vector<gossip_digest>& g_digest_list);
@@ -155,7 +156,6 @@ public:
         versioned_value::REMOVED_TOKEN,
         versioned_value::STATUS_LEFT,
         versioned_value::HIBERNATE,
-        versioned_value::STATUS_BOOTSTRAPPING,
     };
     static constexpr std::chrono::milliseconds INTERVAL{1000};
     static constexpr std::chrono::hours A_VERY_LONG_TIME{24 * 3};
@@ -557,7 +557,7 @@ public:
     bool is_normal(const inet_address& endpoint) const;
     bool is_cql_ready(const inet_address& endpoint) const;
     bool is_silent_shutdown_state(const endpoint_state& ep_state) const;
-    void mark_as_shutdown(const inet_address& endpoint);
+    void mark_as_shutdown(const inet_address& endpoint, seastar::rpc::optional<bool> bootstrap);
     void force_newer_generation();
 public:
     sstring get_gossip_status(const endpoint_state& ep_state) const;
