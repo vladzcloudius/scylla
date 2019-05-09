@@ -268,6 +268,17 @@ public:
             _ready.set_exception(mutation_write_failure_exception(get_schema()->ks_name(), get_schema()->cf_name(), _cl, _cl_acks, _failed, _total_block_for, _type));
         }
     }
+
+    bool remove_pending_target(gms::inet_address ip) {
+        if (_targets.erase(ip)) {
+            --_total_block_for;
+            // Trigger checking the CL conditions
+            signal(0);
+            return true;
+        }
+        return false;
+    }
+
     bool is_counter() const {
         return _type == db::write_type::COUNTER;
     }
@@ -3640,6 +3651,25 @@ storage_proxy::stop() {
     // FIXME: hints manager should be stopped here but it seems like this function is never called
     uninit_messaging_service();
     return make_ready_future<>();
+}
+
+future<> storage_proxy::remove_from_pending_write_handlers(gms::inet_address endpoint) {
+    // _response_handlers is a very dynamic map since write requests come and go very fast.
+    // Work on a copy of response handlers map in order to prevent a race that may lead to a use-after-free event.
+    auto response_handlers_copy = _response_handlers;
+    return do_with(std::move(response_handlers_copy), [endpoint] (auto& handlers) {
+        return do_for_each(handlers, [endpoint] (auto& pair) {
+            auto& [resp_id, hdl_ptr] = pair;
+            try {
+                if (hdl_ptr->remove_pending_target(endpoint)) {
+                    slogger.debug("Removed {} target from \'pending\' in the request {}", endpoint, resp_id);
+                }
+            } catch(...) {
+                slogger.trace("Failed to remove {} target from \'pending\' in the request {}", endpoint, resp_id);
+            }
+            return make_ready_future<>();
+        });
+    });
 }
 
 }
