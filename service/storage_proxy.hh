@@ -330,6 +330,8 @@ public:
         return *_view_update_handlers_list;
     }
 
+    future<> remove_from_pending_write_handlers(gms::inet_address endpoint);
+
     response_id_type get_next_response_id() {
         auto next = _next_response_id++;
         if (next == 0) { // 0 is reserved for unique_response_handler

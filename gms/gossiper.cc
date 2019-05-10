@@ -1964,6 +1964,9 @@ void gossiper::mark_as_shutdown(const inet_address& endpoint) {
         if (ep_status == gms::versioned_value::STATUS_BOOTSTRAPPING) {
             // set the node to DOWN state - keep the status as is
             ep_state.mark_dead();
+            service::get_storage_proxy().invoke_on_all([endpoint] (service::storage_proxy& local_proxy) {
+                return local_proxy.remove_from_pending_write_handlers(endpoint);
+            }).get();
         } else {
             ep_state.add_application_state(application_state::STATUS, _value_factory.shutdown(true));
         }
