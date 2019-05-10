@@ -175,7 +175,10 @@ void tracing::write_timer_callback() {
 future<> tracing::shutdown() {
     tracing_logger.info("Asked to shut down");
     if (_down) {
-        throw std::logic_error("tracing: shutdown() called for the service that is already down");
+        // FIXME: Ideally this should never happen and we should not call shutdown() before we properly started the service
+        //        or after it has already been shut down.
+        tracing_logger.warn("tracing: shutdown() called for the service that is already down/not yet started");
+        return make_ready_future<>();
     }
 
     write_pending_records();
