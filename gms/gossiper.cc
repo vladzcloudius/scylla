@@ -525,13 +525,13 @@ void gossiper::remove_endpoint(inet_address endpoint) {
     // do subscribers first so anything in the subscriber that depends on gossiper state won't get confused
     // We can not run on_remove callbacks here becasue on_remove in
     // storage_service might take the gossiper::timer_callback_lock
-    seastar::async([this, endpoint] {
+    try {
         _subscribers.for_each([endpoint] (auto& subscriber) {
             subscriber->on_remove(endpoint);
         });
-    }).handle_exception([] (auto ep) {
-        logger.warn("Fail to call on_remove callback: {}", ep);
-    });
+    } catch (...) {
+        logger.warn("Fail to call on_remove callback: {}", std::current_exception());
+    }
 
     if(_seeds.count(endpoint)) {
         build_seeds_list();
@@ -1840,13 +1840,10 @@ future<> gossiper::do_stop_gossiping() {
         }
         _enabled = false;
         _scheduled_gossip_task.cancel();
+
         timer_callback_lock().get();
-        //
-        // Release the timer semaphore since storage_proxy may be waiting for
-        // it.
-        // Gossiper timer is promised to be neither running nor scheduled.
-        //
-        timer_callback_unlock();
+        auto unlock_timer_lock = defer([this] { timer_callback_unlock(); });
+
         get_gossiper().invoke_on_all([] (gossiper& g) {
             if (engine().cpu_id() == 0) {
                 g.fd().unregister_failure_detection_event_listener(&g);
