@@ -132,6 +132,7 @@ public:
     void add_application_state(const endpoint_state& es) {
         _application_state = es._application_state;
         update_is_normal();
+        set_alive(es.is_alive());
     }
 
     /* getters and setters */
