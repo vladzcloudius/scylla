@@ -454,6 +454,7 @@ private:
     stats _stats;
     seastar::metrics::metric_groups _metrics;
     std::unordered_set<ep_key_type> _eps_with_pending_hints;
+    seastar::semaphore _ep_manager_item_delete_lock = {1};
 
 public:
     manager(sstring hints_directory, std::vector<sstring> hinted_dcs, int64_t max_hint_window_ms, resource_manager&res_manager, distributed<database>& db);
@@ -530,6 +531,10 @@ public:
 
     dev_t hints_dir_device_id() const {
         return _hints_dir_device_id;
+    }
+
+    seastar::semaphore& ep_manager_item_delete_lock() noexcept {
+        return _ep_manager_item_delete_lock;
     }
 
     void allow_hints();

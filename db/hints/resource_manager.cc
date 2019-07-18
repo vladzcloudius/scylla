@@ -133,7 +133,8 @@ void space_watchdog::on_timer() {
         _total_size = 0;
         for (manager& shard_manager : per_device_limits.managers) {
             shard_manager.clear_eps_with_pending_hints();
-            lister::scan_dir(shard_manager.hints_dir(), {directory_entry_type::directory}, [this, &shard_manager] (fs::path dir, directory_entry de) {
+          with_semaphore(shard_manager.ep_manager_item_delete_lock(), 1, [this, &shard_manager] {
+            return lister::scan_dir(shard_manager.hints_dir(), {directory_entry_type::directory}, [this, &shard_manager] (fs::path dir, directory_entry de) {
                 _files_count = 0;
                 // Let's scan per-end-point directories and enumerate hints files...
                 //
@@ -149,7 +150,8 @@ void space_watchdog::on_timer() {
                 } else {
                     return scan_one_ep_dir(dir / de.name, shard_manager, ep_key_type(de.name));
                 }
-            }).get();
+            });
+          }).get();
         }
 
         // Adjust the quota to take into account the space we guarantee to every end point manager
