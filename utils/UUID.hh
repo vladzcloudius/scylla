@@ -45,7 +45,7 @@ public:
     UUID() : most_sig_bits(0), least_sig_bits(0) {}
     UUID(int64_t most_sig_bits, int64_t least_sig_bits)
         : most_sig_bits(most_sig_bits), least_sig_bits(least_sig_bits) {}
-    explicit UUID(const sstring& uuid_string) : UUID(sstring_view(uuid_string)) { }
+    explicit UUID(const sstring& uuid_string) : UUID(sstring_view(uuid_string.data(), uuid_string.size())) { }
     explicit UUID(const char * s) : UUID(sstring_view(s)) {}
     explicit UUID(sstring_view uuid_string);
 
