@@ -59,6 +59,10 @@
 
 #include "types/user.hh"
 
+namespace cql3 {
+    extern logging::logger log;
+};
+
 namespace cql_transport {
 
 static logging::logger clogger("cql_server");
@@ -724,6 +728,7 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_qu
     tracing::set_consistency_level(query_state.get_trace_state(), options.get_consistency());
     tracing::set_optional_serial_consistency_level(query_state.get_trace_state(), options.get_serial_consistency());
     tracing::add_query(query_state.get_trace_state(), query);
+    cql3::log.trace("executing unprepared: \"{}\"; page_size: {}", query, options.get_page_size());
     tracing::set_user_timestamp(query_state.get_trace_state(), options.get_specific_options().timestamp);
 
     tracing::begin(query_state.get_trace_state(), "Execute CQL3 query", client_state.get_client_address());
@@ -798,6 +803,7 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_ex
     tracing::set_consistency_level(trace_state, options.get_consistency());
     tracing::set_optional_serial_consistency_level(trace_state, options.get_serial_consistency());
     tracing::add_query(trace_state, prepared->raw_cql_statement);
+    cql3::log.trace("executing: \"{}\"; page_size: {}", prepared->raw_cql_statement, options.get_page_size());
     tracing::add_prepared_statement(trace_state, prepared);
 
     tracing::begin(trace_state, seastar::value_of([&id] { return seastar::format("Execute CQL3 prepared query [{}]", id); }),
