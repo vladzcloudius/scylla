@@ -41,6 +41,7 @@
 #pragma once
 
 #include <deque>
+#include <functional>
 #include <unordered_set>
 #include <seastar/util/lazy.hh>
 #include <seastar/core/weak_ptr.hh>
@@ -197,6 +198,10 @@ public:
         return _state_props.contains(trace_state_props::log_slow_query);
     }
 
+    bool log_slow_query_fast() const {
+        return _state_props.contains(trace_state_props::log_slow_query_fast);
+    }
+
     trace_state_props_set raw_props() const {
         return _state_props;
     }
@@ -262,6 +267,12 @@ private:
         set_state(state::foreground);
     }
 
+    void begin(gms::inet_address client) {
+        begin();
+        _records->session_rec.client = client;
+        _records->session_rec.started_at = std::chrono::system_clock::now();
+    }
+
     /**
      * Initiates a tracing session.
      *
@@ -272,15 +283,13 @@ private:
      * @param client address of a client the traced request came from
      */
     void begin(sstring request, gms::inet_address client) {
-        begin();
-        _records->session_rec.client = client;
+        begin(client);
         _records->session_rec.request = std::move(request);
-        _records->session_rec.started_at = std::chrono::system_clock::now();
     }
 
-    template <typename Func>
-    void begin(const seastar::lazy_eval<Func>& lf, gms::inet_address client) {
-        begin(lf(), client);
+    void begin(std::function<sstring()> f, gms::inet_address client) {
+        begin(client);
+        _records->session_rec.req_func = std::move(f);
     }
 
     /**
@@ -684,7 +693,7 @@ inline void begin(const trace_state_ptr& p, A&&... a) {
  */
 template <typename... A>
 inline void trace(const trace_state_ptr& p, A&&... a) noexcept {
-    if (p) {
+    if (p && !p->log_slow_query_fast()) {
         p->trace(std::forward<A>(a)...);
     }
 }
@@ -697,7 +706,7 @@ inline std::optional<trace_info> make_trace_info(const trace_state_ptr& state) {
     // When only a slow query logging is enabled we don't really care what
     // happens on a remote replica after a Client has received a response for
     // his/her query.
-    if (state && (state->full_tracing() || (state->log_slow_query() && !state->is_in_state(trace_state::state::background)))) {
+    if (state && !state->log_slow_query_fast() && (state->full_tracing() || (state->log_slow_query() && !state->is_in_state(trace_state::state::background)))) {
         return trace_info{state->session_id(), state->type(), state->write_on_close(), state->raw_props(), state->slow_query_threshold_us(), state->slow_query_ttl_sec(), state->my_span_id()};
     }
 

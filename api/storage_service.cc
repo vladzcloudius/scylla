@@ -818,6 +818,7 @@ void set_storage_service(http_context& ctx, routes& r) {
                 }
                 if (enable != "") {
                     local_tracing.set_slow_query_enabled(strcasecmp(enable.c_str(), "true") == 0);
+                    local_tracing.set_slow_query_fast_enabled(strcasecmp(enable.c_str(), "true") == 0);
                 }
             }).then([] {
                 return make_ready_future<json::json_return_type>(json_void());

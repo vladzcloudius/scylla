@@ -141,7 +141,7 @@ private:
      *
      * @return the relevant cql3::query_options object with the mutation data
      */
-    static cql3::query_options make_session_mutation_data(const one_session_records& all_records_handle);
+    static cql3::query_options make_session_mutation_data(one_session_records& all_records_handle);
 
     /**
      * Create a mutation data for a new session_idx record

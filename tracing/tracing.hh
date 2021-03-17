@@ -129,13 +129,14 @@ std::ostream& operator<<(std::ostream& os, const span_id& id);
 //
 // Otherwise this may break IDL's backward compatibility.
 enum class trace_state_props {
-    write_on_close, primary, log_slow_query, full_tracing
+    write_on_close, primary, log_slow_query, log_slow_query_fast, full_tracing
 };
 
 using trace_state_props_set = enum_set<super_enum<trace_state_props,
     trace_state_props::write_on_close,
     trace_state_props::primary,
     trace_state_props::log_slow_query,
+    trace_state_props::log_slow_query_fast,
     trace_state_props::full_tracing>>;
 
 class trace_info {
@@ -217,6 +218,7 @@ struct session_record {
     std::set<sstring> tables;
     sstring username;
     sstring request;
+    std::function<sstring()> req_func;
     size_t request_size = 0;
     size_t response_size = 0;
     std::chrono::system_clock::time_point started_at;
@@ -393,6 +395,7 @@ private:
     // backend.
     bool _down = true;
     bool _slow_query_logging_enabled = false;
+    bool _slow_query_fast_enabled = false;
     std::unique_ptr<i_tracing_backend_helper> _tracing_backend_helper_ptr;
     sstring _thread_name;
     const backend_registry& _backend_registry;
@@ -586,8 +589,16 @@ public:
         _slow_query_logging_enabled = enable;
     }
 
+    void set_slow_query_fast_enabled(bool enable = true) {
+        _slow_query_fast_enabled = enable;
+    }
+
     bool slow_query_tracing_enabled() const {
         return _slow_query_logging_enabled;
+    }
+
+    bool slow_query_fast_enabled() const {
+        return _slow_query_fast_enabled;
     }
 
     /**

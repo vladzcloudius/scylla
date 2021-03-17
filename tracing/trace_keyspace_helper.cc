@@ -281,8 +281,8 @@ void trace_keyspace_helper::write_records_bulk(records_bulk& bulk) {
     });
 }
 
-cql3::query_options trace_keyspace_helper::make_session_mutation_data(const one_session_records& session_records) {
-    const session_record& record = session_records.session_rec;
+cql3::query_options trace_keyspace_helper::make_session_mutation_data(one_session_records& session_records) {
+    session_record& record = session_records.session_rec;
     auto millis_since_epoch = std::chrono::duration_cast<std::chrono::milliseconds>(record.started_at.time_since_epoch()).count();
     std::vector<std::pair<data_value, data_value>> parameters_values_vector;
     parameters_values_vector.reserve(record.parameters.size());
@@ -302,6 +302,12 @@ cql3::query_options trace_keyspace_helper::make_session_mutation_data(const one_
         "username",
         "ttl"
     };
+
+    if (record.req_func) {
+        record.request = record.req_func();
+        record.req_func = nullptr;
+    }
+
     std::vector<cql3::raw_value> values {
         cql3::raw_value::make_value(uuid_type->decompose(session_records.session_id)),
         cql3::raw_value::make_value(utf8_type->decompose(type_to_string(record.command))),

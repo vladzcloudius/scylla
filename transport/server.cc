@@ -465,6 +465,7 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
     tracing::trace_state_props_set trace_props;
 
     trace_props.set_if<tracing::trace_state_props::log_slow_query>(tracing::tracing::get_local_tracing_instance().slow_query_tracing_enabled());
+    trace_props.set_if<tracing::trace_state_props::log_slow_query_fast>(tracing::tracing::get_local_tracing_instance().slow_query_fast_enabled());
     trace_props.set_if<tracing::trace_state_props::full_tracing>(tracing_request != tracing_request_type::not_requested);
     tracing::trace_state_ptr trace_state;
 
@@ -1077,14 +1078,14 @@ process_execute_internal(service::client_state& client_state, distributed<cql3::
     auto& options = *q_state->options;
     auto skip_metadata = options.skip_metadata();
 
-    if (init_trace) {
+    if (init_trace && trace_state) {
         tracing::set_page_size(trace_state, options.get_page_size());
         tracing::set_consistency_level(trace_state, options.get_consistency());
         tracing::set_optional_serial_consistency_level(trace_state, options.get_serial_consistency());
         tracing::add_query(trace_state, prepared->statement->raw_cql_statement);
         tracing::add_prepared_statement(trace_state, prepared);
 
-        tracing::begin(trace_state, seastar::value_of([&id] { return seastar::format("Execute CQL3 prepared query [{}]", id); }),
+        tracing::begin(trace_state, [id] { return seastar::format("Execute CQL3 prepared query [{}]", id); },
                 client_state.get_client_address());
     }
 
