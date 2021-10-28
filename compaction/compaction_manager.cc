@@ -584,7 +584,12 @@ void compaction_manager::submit(column_family* cf) {
             column_family& cf = *task->compacting_cf;
             sstables::compaction_strategy cs = cf.get_compaction_strategy();
             sstables::compaction_descriptor descriptor = cs.get_sstables_for_compaction(cf, get_candidates(cf));
-            int weight = calculate_weight(descriptor.sstables);
+            // Use weight 0 for compactions that are comprised solely of completely expired sstables.
+            // We want these compactions to be in a separate weight class because they are very lightweight, fast and efficient.
+            int weight = 0;
+            if (descriptor.is_compact_fully_expired == sstables::compaction_descriptor::compact_fully_expired::no) {
+                weight = calculate_weight(descriptor.sstables);
+            }
 
             if (descriptor.sstables.empty() || !can_proceed(task) || cf.is_auto_compaction_disabled_by_user()) {
                 _stats.pending_tasks--;

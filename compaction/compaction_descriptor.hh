@@ -156,6 +156,12 @@ struct compaction_descriptor {
 
     ::io_priority_class io_priority = default_priority_class();
 
+    class dummy_tag {};
+    using compact_fully_expired = seastar::bool_class<dummy_tag>;
+
+    // Denotes if this compaction task is comprised solely of completely expired SSTables
+    compact_fully_expired is_compact_fully_expired = compact_fully_expired::no;
+
     compaction_descriptor() = default;
 
     static constexpr int default_level = 0;
@@ -175,6 +181,20 @@ struct compaction_descriptor {
         , run_identifier(run_identifier)
         , options(options)
         , io_priority(io_priority)
+    {}
+
+    explicit compaction_descriptor(compact_fully_expired fully_expired,
+                                   std::vector<sstables::shared_sstable> sstables,
+                                   std::optional<sstables::sstable_set> all_sstables_snapshot,
+                                   ::io_priority_class io_priority)
+        : sstables(std::move(sstables))
+        , all_sstables_snapshot(std::move(all_sstables_snapshot))
+        , level(default_level)
+        , max_sstable_bytes(default_max_sstable_bytes)
+        , run_identifier(utils::make_random_uuid())
+        , options(compaction_type_options::make_regular())
+        , io_priority(io_priority)
+        , is_compact_fully_expired(fully_expired)
     {}
 };
 
