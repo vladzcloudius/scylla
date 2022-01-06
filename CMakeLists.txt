@@ -548,7 +548,6 @@ set(scylla_sources
     redis/query_processor.cc
     redis/query_utils.cc
     redis/server.cc
-    redis/service.cc
     redis/stats.cc
     release.cc
     repair/repair.cc
@@ -616,7 +615,6 @@ set(scylla_sources
     thrift/server.cc
     thrift/thrift_validation.cc
     timeout_config.cc
-    tools/scylla-sstable-index.cc
     tools/scylla-types.cc
     tracing/traced_file.cc
     tracing/trace_keyspace_helper.cc

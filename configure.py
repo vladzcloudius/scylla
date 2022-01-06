@@ -1917,7 +1917,7 @@ with open(buildfile_tmp, 'w') as f:
                                             '$builddir/' + mode + '/utils/gz/gen_crc_combine_table'))
         f.write('build {}: link_build.{} {}\n'.format('$builddir/' + mode + '/utils/gz/gen_crc_combine_table', mode,
                                                 '$builddir/' + mode + '/utils/gz/gen_crc_combine_table.o'))
-        f.write('   libs = $seastar_libs_{}\n'.format(mode))
+        f.write('   libs = $seastar_libs_{} $ldflags\n'.format(mode))
         f.write(
             'build {mode}-objects: phony {objs}\n'.format(
                 mode=mode,

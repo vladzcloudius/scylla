@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 
 USAGE=$(cat <<-END
 Usage: $(basename "$0") [-h|--help] [-o|--output-dir PATH] -- generate Scylla version and build information files.
