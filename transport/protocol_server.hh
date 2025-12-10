@@ -43,8 +43,8 @@ public:
     /// This variant is used by the REST API so failure is acceptable.
     virtual future<> request_stop_server() = 0;
 
-    virtual future<utils::chunked_vector<client_data>> get_client_data() {
-        return make_ready_future<utils::chunked_vector<client_data>>(utils::chunked_vector<client_data>());
+    virtual future<utils::chunked_vector<foreign_ptr<std::unique_ptr<client_data>>>> get_client_data() {
+        return make_ready_future<utils::chunked_vector<foreign_ptr<std::unique_ptr<client_data>>>>();
     }
 
     protocol_server(seastar::scheduling_group sg) noexcept : _sched_group(std::move(sg)) {}
